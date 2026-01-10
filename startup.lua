@@ -1,4 +1,4 @@
--- ameOs v32.0 [FUSION REVIVAL 2026]
+-- ameOs v32.0 [ULTRA STABLE REBUILD 2026]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -39,7 +39,7 @@ local function loadSettings()
     end
 end
 
--- 3. ТА САМАЯ АНИМАЦИЯ FUSION
+-- 3. ПОЛНАЯ АНИМАЦИЯ FUSION
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
     local duration = 8
@@ -111,11 +111,11 @@ local function systemAuth()
     if not fs.exists(currentPath) then fs.makeDir(currentPath) end
 end
 
--- 5. ЕДИНАЯ ОТРИСОВКА ИНТЕРФЕЙСА (Без часов)
+-- 5. ОТРИСОВКА (ТОЛЬКО ПО ЗАПРОСУ)
 local function drawUI()
     local theme = themes[settings.themeIndex]
     
-    -- Таскбар
+    -- Панель задач
     taskWin.setBackgroundColor(colors.black)
     taskWin.clear()
     local menu = { {n="HOME", x=1}, {n="FILE", x=8}, {n="SHLL", x=15}, {n="CONF", x=22} }
@@ -126,11 +126,13 @@ local function drawUI()
         taskWin.write(" "..m.n.." ")
     end
 
-    -- Верхняя панель (Только заголовок)
+    -- Верхняя панель + Часы (рисуем всё сразу)
     topWin.setBackgroundColor(theme.accent)
     topWin.setTextColor(theme.text)
-    topWin.setCursorPos(1, 1)
-    topWin.write(" ameOs | " .. activeTab .. string.rep(" ", w - #activeTab - 8))
+    topWin.clear()
+    topWin.setCursorPos(2, 1) topWin.write("ameOs | " .. activeTab)
+    topWin.setCursorPos(w - 6, 1)
+    topWin.write(textutils.formatTime(os.time(), true))
 
     -- Главное окно
     mainWin.setBackgroundColor(theme.bg)
@@ -168,71 +170,79 @@ local function drawUI()
     end
 end
 
--- 6. ОБЪЕДИНЕННЫЙ ЦИКЛ ОБНОВЛЕНИЯ (Часы + UI)
-local function renderTask()
+-- 6. ФОНОВОЕ ОБНОВЛЕНИЕ ВРЕМЕНИ
+local function clockTask()
     while running do
-        drawUI()
-        -- Внутренний цикл для часов (чтобы UI не дергался каждую секунду)
-        for i=1, 10 do
+        sleep(0.8)
+        os.queueEvent("update_clock")
+    end
+end
+
+-- 7. ГЛАВНЫЙ ЦИКЛ
+local function mainLoop()
+    drawUI()
+    while running do
+        local event, p1, p2, p3 = os.pullEvent()
+        
+        if event == "update_clock" then
+            -- Обновляем только часы в углу, не трогая остальной экран
             local theme = themes[settings.themeIndex]
             topWin.setBackgroundColor(theme.accent)
             topWin.setTextColor(theme.text)
             topWin.setCursorPos(w - 6, 1)
             topWin.write(textutils.formatTime(os.time(), true))
-            sleep(0.5)
-            if not running then break end
-        end
-    end
-end
 
--- 7. ОБРАБОТЧИК КЛИКОВ
-local function inputTask()
-    while running do
-        local ev, btn, x, y = os.pullEvent("mouse_click")
-        if y == h then
-            if x >= 1 and x <= 6 then activeTab = "HOME"
-            elseif x >= 8 and x <= 13 then activeTab = "FILE"
-            elseif x >= 15 and x <= 20 then activeTab = "SHLL"
-            elseif x >= 22 and x <= 27 then activeTab = "CONF" end
-            
-            if activeTab == "SHLL" then
-                drawUI() -- Мгновенно подсветить таскбар
-                local old = term.redirect(mainWin)
-                term.setBackgroundColor(colors.black)
-                term.clear() term.setCursorPos(1,1)
-                term.setCursorBlink(true)
-                parallel.waitForAny(
-                    function() shell.run("shell") end,
-                    function()
-                        while true do
-                            local _, _, mx, my = os.pullEvent("mouse_click")
-                            if my == h then os.queueEvent("mouse_click", 1, mx, my) return end
-                        end
-                    end
-                )
-                term.setCursorBlink(false)
-                term.redirect(old)
-                activeTab = "HOME"
-            end
-        elseif activeTab == "FILE" and y > 2 and y < h then
-            local files = fs.list(currentPath)
-            if currentPath ~= "/" then table.insert(files, 1, "..") end
-            local sel = files[y-2]
-            if sel then
-                local p = fs.combine(currentPath, sel)
-                if fs.isDir(p) then currentPath = p else 
+        elseif event == "mouse_click" then
+            local btn, x, y = p1, p2, p3
+            if y == h then
+                if x >= 1 and x <= 6 then activeTab = "HOME"
+                elseif x >= 8 and x <= 13 then activeTab = "FILE"
+                elseif x >= 15 and x <= 20 then activeTab = "SHLL"
+                elseif x >= 22 and x <= 27 then activeTab = "CONF" end
+                
+                drawUI() -- Перерисовываем UI сразу
+
+                if activeTab == "SHLL" then
                     local old = term.redirect(mainWin)
+                    term.setBackgroundColor(colors.black)
+                    term.clear() term.setCursorPos(1,1)
                     term.setCursorBlink(true)
-                    shell.run("edit", p)
+                    parallel.waitForAny(
+                        function() shell.run("shell") end,
+                        function()
+                            while true do
+                                local _, _, mx, my = os.pullEvent("mouse_click")
+                                if my == h then os.queueEvent("mouse_click", 1, mx, my) return end
+                            end
+                        end
+                    )
                     term.setCursorBlink(false)
                     term.redirect(old)
+                    activeTab = "HOME"
+                    drawUI()
                 end
+            elseif activeTab == "FILE" and y > 2 and y < h then
+                local files = fs.list(currentPath)
+                if currentPath ~= "/" then table.insert(files, 1, "..") end
+                local sel = files[y-2]
+                if sel then
+                    local p = fs.combine(currentPath, sel)
+                    if fs.isDir(p) then currentPath = p else 
+                        local old = term.redirect(mainWin)
+                        term.setCursorBlink(true)
+                        shell.run("edit", p)
+                        term.setCursorBlink(false)
+                        term.redirect(old)
+                    end
+                end
+                drawUI()
+            elseif activeTab == "CONF" and y == 5 then
+                settings.themeIndex = (settings.themeIndex % #themes) + 1
+                saveSettings()
+                drawUI()
+            elseif activeTab == "CONF" and y == 7 then
+                running = false
             end
-        elseif activeTab == "CONF" and y == 5 then
-            settings.themeIndex = (settings.themeIndex % #themes) + 1
-            saveSettings()
-        elseif activeTab == "CONF" and y == 7 then
-            running = false
         end
     end
 end
@@ -240,7 +250,7 @@ end
 -- 8. СТАРТ
 bootAnim()
 systemAuth()
-parallel.waitForAny(renderTask, inputTask)
+parallel.waitForAny(clockTask, mainLoop)
 
 term.setBackgroundColor(colors.black)
 term.clear()
