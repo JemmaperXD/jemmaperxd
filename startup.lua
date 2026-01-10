@@ -1,4 +1,4 @@
--- ameOs v32.0 [FUSION ANIMATION & STABLE 2026]
+--- ameOs v33.0 [FINAL BUILD 2026]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local UPDATE_URL = "github.com"
@@ -35,19 +35,18 @@ local function loadSettings()
     end
 end
 
--- Функция обновления
+-- ФУНКЦИЯ ОБНОВЛЕНИЯ ЧЕРЕЗ WGET
 local function updateSystem(win)
     win.clear()
     win.setCursorPos(1, 2)
     win.setTextColor(colors.yellow)
-    win.write(" Connecting to GitHub...")
-    local response = http.get(UPDATE_URL)
-    if response then
-        local content = response.readAll()
-        response.close()
-        local f = fs.open("startup.lua", "w")
-        f.write(content)
-        f.close()
+    win.write(" Updating via wget...")
+    
+    if fs.exists("startup.lua") then fs.delete("startup.lua") end
+    
+    local success = shell.run("wget", UPDATE_URL, "startup.lua")
+    
+    if success and fs.exists("startup.lua") then
         win.setCursorPos(1, 4)
         win.setTextColor(colors.lime)
         win.write(" Success! Rebooting...")
@@ -56,59 +55,43 @@ local function updateSystem(win)
     else
         win.setCursorPos(1, 4)
         win.setTextColor(colors.red)
-        win.write(" Update failed.")
-        sleep(2)
+        win.write(" wget: Failed.")
+        sleep(3)
     end
 end
 
--- 3. АНИМАЦИЯ (15 сек, Слияние в конце)
+-- 3. АНИМАЦИЯ (15 сек, точки всегда, круг в конце со слиянием)
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
-    local duration = 15
     local start = os.clock()
     local angle = 0
-    
-    while true do
+    while os.clock() - start < 15 do
         local elapsed = os.clock() - start
-        if elapsed >= duration then break end
-        
         term.setBackgroundColor(colors.black)
         term.clear()
         
-        -- Параметры слияния (последние 3 секунды)
         local fusion = 1.0
-        if elapsed > 12 then
-            fusion = math.max(0, 1 - (elapsed - 12) / 3)
-            -- Отрисовка кольца
+        if elapsed > 11 then
+            fusion = math.max(0, 1 - (elapsed - 11) / 4)
             term.setTextColor(colors.gray)
             term.setCursorPos(cx-2, cy-1) term.write("#####")
             term.setCursorPos(cx-3, cy)   term.write("#     #")
             term.setCursorPos(cx-2, cy+1) term.write("#####")
         end
         
-        -- Вращающиеся точки с динамическим радиусом
         term.setTextColor(colors.cyan)
-        local radiusX = 2.5 * fusion
-        local radiusY = 1.5 * fusion
-        
+        local rx, ry = 2.5 * fusion, 1.5 * fusion
         for i = 1, 3 do
             local a = angle + (i * 2.1)
-            local dx = math.floor(math.cos(a) * radiusX + 0.5)
-            local dy = math.floor(math.sin(a) * radiusY + 0.5)
-            term.setCursorPos(cx + dx, cy + dy)
-            term.write(fusion > 0.2 and "o" or "@") -- Точка меняет вид при слиянии
+            local dx = math.floor(math.cos(a)*rx + 0.5)
+            local dy = math.floor(math.sin(a)*ry + 0.5)
+            term.setCursorPos(cx+dx, cy+dy) term.write(fusion > 0.2 and "o" or "@")
         end
         
-        -- Прогресс бар
-        local barLen = 14
-        local progress = math.floor((elapsed / duration) * barLen)
-        term.setCursorPos(w/2 - barLen/2, cy + 4)
+        local progress = math.floor((elapsed / 15) * 14)
+        term.setCursorPos(w/2 - 7, cy + 5)
         term.setTextColor(colors.gray)
-        term.write("["..string.rep("=", progress)..string.rep(" ", barLen-progress).."]")
-        
-        term.setCursorPos(w/2 - 2, h - 1)
-        term.setTextColor(colors.white)
-        term.write("ameOS")
+        term.write("["..string.rep("=", progress)..string.rep(" ", 14-progress).."]")
         
         angle = angle + 0.4
         sleep(0.05)
@@ -171,6 +154,7 @@ local function mainApp()
         mainWin.setBackgroundColor(theme.bg)
         mainWin.setTextColor(theme.text)
         mainWin.clear()
+        mainWin.setCursorBlink(false)
 
         if activeTab == "HOME" then
             homeFiles = fs.list(getHomeDir())
@@ -204,7 +188,6 @@ local function mainApp()
             mainWin.setVisible(true)
             local old = term.redirect(mainWin)
             term.setBackgroundColor(colors.black)
-            term.setTextColor(colors.white)
             term.setCursorBlink(true)
             term.clear() term.setCursorPos(1,1)
             print("Shell Mode. Click Taskbar to exit.")
@@ -278,4 +261,4 @@ pcall(mainApp)
 term.setBackgroundColor(colors.black)
 term.clear()
 term.setCursorBlink(true)
-print("ameOs v32.0 closed.")
+print("ameOs closed.")
