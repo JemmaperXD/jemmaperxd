@@ -1,18 +1,18 @@
--- ameOs v32.0 [FUSION ANIMATION & PARALLEL CLOCK 2026]
+-- ameOs v32.0 [ULTIMATE STABLE 2026]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
 local activeTab = "HOME"
 local currentPath = "/"
 
--- 1. ТЕМЫ
+-- 1. ТЕМЫ (Только Night и Hacker)
 local themes = {
     { name = "Night",     bg = colors.black, accent = colors.gray, text = colors.lightGray },
     { name = "Hacker",    bg = colors.black, accent = colors.lime, text = colors.lime }
 }
 local settings = { themeIndex = 1, user = "User", pass = "", isRegistered = false }
 
--- Окна
+-- Создание изолированных окон
 local topWin = window.create(term.current(), 1, 1, w, 1)
 local mainWin = window.create(term.current(), 1, 2, w, h - 2)
 local taskWin = window.create(term.current(), 1, h, w, 1)
@@ -39,22 +39,7 @@ local function loadSettings()
     end
 end
 
--- 3. АНИМАЦИЯ (сокращена для быстрого старта)
-local function bootAnim()
-    local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
-    local duration = 3
-    local start = os.clock()
-    while os.clock() - start < duration do
-        term.setBackgroundColor(colors.black)
-        term.clear()
-        term.setTextColor(colors.cyan)
-        term.setCursorPos(cx, cy)
-        term.write("@")
-        sleep(0.1)
-    end
-end
-
--- 4. АВТОРИЗАЦИЯ
+-- 3. АВТОРИЗАЦИЯ
 local function systemAuth()
     loadSettings()
     term.setCursorBlink(false)
@@ -81,20 +66,23 @@ local function systemAuth()
     if not fs.exists(currentPath) then fs.makeDir(currentPath) end
 end
 
--- 5. ФУНКЦИЯ ЧАСОВ
+-- 4. ПОСТОЯННО ОБНОВЛЯЕМЫЕ ЧАСЫ (Отдельная функция)
 local function clockTask()
     while running do
         local theme = themes[settings.themeIndex]
+        -- Пишем время напрямую в правый верхний угол
         topWin.setBackgroundColor(theme.accent)
         topWin.setTextColor(theme.text)
         topWin.setCursorPos(w - 6, 1)
         topWin.write(textutils.formatTime(os.time(), true))
-        sleep(0.8)
+        -- Это заставляет окно перерисоваться немедленно
+        topWin.setVisible(true) 
+        sleep(0.5) 
     end
 end
 
--- 6. ОТРИСОВКА ИНТЕРФЕЙСА
-local function drawInterface()
+-- 5. ОТРИСОВКА ИНТЕРФЕЙСА
+local function drawUI()
     local theme = themes[settings.themeIndex]
     
     -- Панель задач
@@ -108,13 +96,14 @@ local function drawInterface()
         taskWin.write(" "..m.n.." ")
     end
 
-    -- Заголовок
+    -- Верхняя панель (заголовок)
     topWin.setBackgroundColor(theme.accent)
     topWin.setTextColor(theme.text)
-    topWin.clear()
-    topWin.setCursorPos(2, 1) topWin.write("ameOs | " .. activeTab)
+    -- Очищаем только левую часть, чтобы не затереть часы
+    topWin.setCursorPos(1, 1)
+    topWin.write(" ameOs | " .. activeTab .. string.rep(" ", w - 8 - #activeTab))
 
-    -- Контент
+    -- Главное окно
     mainWin.setBackgroundColor(theme.bg)
     mainWin.setTextColor(theme.text)
     mainWin.clear()
@@ -152,80 +141,76 @@ local function drawInterface()
     end
 end
 
--- 7. ОБРАБОТЧИК СОБЫТИЙ
-local function mainEventHandler()
+-- 6. ГЛАВНАЯ ЛОГИКА
+local function mainLoop()
     while running do
-        drawInterface()
-        local ev, btn, x, y = os.pullEvent()
+        term.setCursorBlink(false) -- Принудительно выключаем курсор на рабочем столе
+        drawUI()
+        local ev, btn, x, y = os.pullEvent("mouse_click")
         
-        if ev == "mouse_click" then
-            if y == h then -- Таскбар
-                if x >= 1 and x <= 6 then activeTab = "HOME"
-                elseif x >= 8 and x <= 13 then activeTab = "FILE"
-                elseif x >= 15 and x <= 20 then activeTab = "SHLL"
-                elseif x >= 22 and x <= 27 then activeTab = "CONF" end
+        if y == h then -- Клик по таскбару
+            if x >= 1 and x <= 6 then activeTab = "HOME"
+            elseif x >= 8 and x <= 13 then activeTab = "FILE"
+            elseif x >= 15 and x <= 20 then activeTab = "SHLL"
+            elseif x >= 22 and x <= 27 then activeTab = "CONF" end
+            
+            -- ЕСЛИ ВЫБРАН ШЕЛЛ
+            if activeTab == "SHLL" then
+                drawUI() -- СРАЗУ рисуем UI, чтобы кнопка подсветилась
+                local old = term.redirect(mainWin)
+                term.setBackgroundColor(colors.black)
+                term.clear() term.setCursorPos(1,1)
+                term.setCursorBlink(true) -- ВКЛЮЧАЕМ МОРГАНИЕ В ШЕЛЛЕ
                 
-                -- СРАЗУ перерисовываем, чтобы кнопка SHLL подсветилась
-                drawInterface()
-
-                -- Если выбрали Shell, запускаем его
-                if activeTab == "SHLL" then
-                    mainWin.setVisible(true)
-                    local old = term.redirect(mainWin)
-                    term.setBackgroundColor(colors.black)
-                    term.clear() term.setCursorPos(1,1)
-                    term.setCursorBlink(true) -- ВКЛЮЧАЕМ КУРСОР
-                    
-                    parallel.waitForAny(
-                        function() shell.run("shell") end,
-                        function()
-                            while true do
-                                local _, _, mx, my = os.pullEvent("mouse_click")
-                                if my == h then 
-                                    os.queueEvent("mouse_click", 1, mx, my) 
-                                    return 
-                                end
+                parallel.waitForAny(
+                    function() shell.run("shell") end,
+                    function()
+                        while true do
+                            local _, _, mx, my = os.pullEvent("mouse_click")
+                            if my == h then 
+                                os.queueEvent("mouse_click", 1, mx, my) 
+                                return 
                             end
                         end
-                    )
-                    
-                    term.setCursorBlink(false) -- ВЫКЛЮЧАЕМ КУРСОР ПРИ ВЫХОДЕ
-                    term.redirect(old)
-                    activeTab = "HOME"
-                end
-
-            elseif activeTab == "FILE" and y > 2 and y < h then
-                local files = fs.list(currentPath)
-                if currentPath ~= "/" then table.insert(files, 1, "..") end
-                local sel = files[y-2]
-                if sel then
-                    local p = fs.combine(currentPath, sel)
-                    if fs.isDir(p) then currentPath = p else 
-                        local old = term.redirect(mainWin)
-                        term.setCursorBlink(true)
-                        shell.run("edit", p)
-                        term.setCursorBlink(false)
-                        term.redirect(old)
                     end
-                end
-            elseif activeTab == "CONF" then
-                if y == 5 then 
-                    settings.themeIndex = (settings.themeIndex % #themes) + 1 
-                    saveSettings() 
-                elseif y == 7 then running = false end
+                )
+                
+                term.setCursorBlink(false)
+                term.redirect(old)
+                activeTab = "HOME"
             end
+
+        elseif activeTab == "FILE" and y > 2 and y < h then
+            local files = fs.list(currentPath)
+            if currentPath ~= "/" then table.insert(files, 1, "..") end
+            local sel = files[y-2]
+            if sel then
+                local p = fs.combine(currentPath, sel)
+                if fs.isDir(p) then currentPath = p else 
+                    local old = term.redirect(mainWin)
+                    term.setCursorBlink(true) -- Моргает в редакторе
+                    shell.run("edit", p)
+                    term.setCursorBlink(false)
+                    term.redirect(old)
+                end
+            end
+        elseif activeTab == "CONF" then
+            if y == 5 then 
+                settings.themeIndex = (settings.themeIndex % #themes) + 1 
+                saveSettings() 
+            elseif y == 7 then running = false end
         end
     end
 end
 
--- 8. СТАРТ
-bootAnim()
+-- 7. ЗАПУСК
 systemAuth()
-parallel.waitForAny(clockTask, mainEventHandler)
+-- Запускаем часы и основную логику параллельно
+parallel.waitForAny(clockTask, mainLoop)
 
--- Выход
+-- Завершение
 term.setBackgroundColor(colors.black)
 term.clear()
 term.setCursorBlink(true)
 term.setCursorPos(1,1)
-print("ameOs v32.0 closed.")
+print("ameOs closed.")
