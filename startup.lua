@@ -1,4 +1,4 @@
--- ameOs v32.0 [TOTAL REBUILD 2026]
+-- ameOs v32.0 [FUSION REVIVAL 2026]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -39,31 +39,48 @@ local function loadSettings()
     end
 end
 
--- 3. ВОЗВРАЩЕННАЯ АНИМАЦИЯ (FUSION)
+-- 3. ТА САМАЯ АНИМАЦИЯ FUSION
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
-    local duration = 5
+    local duration = 8
     local start = os.clock()
     local angle = 0
-    while os.clock() - start < duration do
+    
+    while true do
         local elapsed = os.clock() - start
+        if elapsed >= duration then break end
+        
         term.setBackgroundColor(colors.black)
         term.clear()
         
-        term.setTextColor(colors.cyan)
-        for i = 1, 3 do
-            local a = angle + (i * 2.1)
-            local dx = math.floor(math.cos(a) * 3 + 0.5)
-            local dy = math.floor(math.sin(a) * 2 + 0.5)
-            term.setCursorPos(cx + dx, cy + dy)
-            term.write("o")
+        local fusion = 1.0
+        if elapsed > (duration - 3) then
+            fusion = math.max(0, 1 - (elapsed - (duration - 3)) / 3)
+            term.setTextColor(colors.gray)
+            term.setCursorPos(cx-2, cy-1) term.write("#####")
+            term.setCursorPos(cx-3, cy)   term.write("#     #")
+            term.setCursorPos(cx-2, cy+1) term.write("#####")
         end
         
-        term.setCursorPos(cx - 2, cy + 4)
+        term.setTextColor(colors.cyan)
+        local rX, rY = 2.5 * fusion, 1.5 * fusion
+        for i = 1, 3 do
+            local a = angle + (i * 2.1)
+            term.setCursorPos(cx + math.floor(math.cos(a)*rX+0.5), cy + math.floor(math.sin(a)*rY+0.5))
+            term.write(fusion > 0.2 and "o" or "@")
+        end
+        
+        local barLen = 14
+        local progress = math.floor((elapsed / duration) * barLen)
+        term.setCursorPos(w/2 - barLen/2, cy + 4)
+        term.setTextColor(colors.gray)
+        term.write("["..string.rep("=", progress)..string.rep(" ", barLen-progress).."]")
+        
+        term.setCursorPos(w/2 - 2, h - 1)
         term.setTextColor(colors.white)
         term.write("ameOS")
         
-        angle = angle + 0.5
+        angle = angle + 0.4
         sleep(0.05)
     end
 end
@@ -73,9 +90,9 @@ local function systemAuth()
     loadSettings()
     term.setBackgroundColor(colors.gray)
     term.clear()
-    term.setCursorBlink(true)
     if not settings.isRegistered then
         term.setCursorPos(w/2-6, h/2-2) term.write("REGISTRATION")
+        term.setCursorBlink(true)
         term.setCursorPos(w/2-8, h/2)   term.write("Name: ") settings.user = read()
         term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") settings.pass = read("*")
         settings.isRegistered = true
@@ -85,6 +102,7 @@ local function systemAuth()
             term.setBackgroundColor(colors.gray) term.clear()
             term.setCursorPos(w/2-6, h/2-1) term.write("LOGIN: "..settings.user)
             term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ")
+            term.setCursorBlink(true)
             if read("*") == settings.pass then break end
         end
     end
@@ -93,23 +111,11 @@ local function systemAuth()
     if not fs.exists(currentPath) then fs.makeDir(currentPath) end
 end
 
--- 5. ЧАСЫ (ОТДЕЛЬНЫЙ ВЫВОД)
-local function clockTask()
-    while running do
-        local theme = themes[settings.themeIndex]
-        topWin.setBackgroundColor(theme.accent)
-        topWin.setTextColor(theme.text)
-        topWin.setCursorPos(w - 6, 1)
-        topWin.write(textutils.formatTime(os.time(), true))
-        sleep(0.5)
-    end
-end
-
--- 6. ОТРИСОВКА ИНТЕРФЕЙСА
-local function drawInterface()
+-- 5. ЕДИНАЯ ОТРИСОВКА ИНТЕРФЕЙСА (Без часов)
+local function drawUI()
     local theme = themes[settings.themeIndex]
     
-    -- Панель задач
+    -- Таскбар
     taskWin.setBackgroundColor(colors.black)
     taskWin.clear()
     local menu = { {n="HOME", x=1}, {n="FILE", x=8}, {n="SHLL", x=15}, {n="CONF", x=22} }
@@ -120,11 +126,11 @@ local function drawInterface()
         taskWin.write(" "..m.n.." ")
     end
 
-    -- Заголовок (Без clear, чтобы не мигали часы)
+    -- Верхняя панель (Только заголовок)
     topWin.setBackgroundColor(theme.accent)
     topWin.setTextColor(theme.text)
     topWin.setCursorPos(1, 1)
-    topWin.write(" ameOs | " .. activeTab .. string.rep(" ", w - 8 - #activeTab))
+    topWin.write(" ameOs | " .. activeTab .. string.rep(" ", w - #activeTab - 8))
 
     -- Главное окно
     mainWin.setBackgroundColor(theme.bg)
@@ -162,13 +168,27 @@ local function drawInterface()
     end
 end
 
--- 7. ОБРАБОТЧИК
-local function mainLoop()
+-- 6. ОБЪЕДИНЕННЫЙ ЦИКЛ ОБНОВЛЕНИЯ (Часы + UI)
+local function renderTask()
     while running do
-        term.setCursorBlink(false)
-        drawInterface()
+        drawUI()
+        -- Внутренний цикл для часов (чтобы UI не дергался каждую секунду)
+        for i=1, 10 do
+            local theme = themes[settings.themeIndex]
+            topWin.setBackgroundColor(theme.accent)
+            topWin.setTextColor(theme.text)
+            topWin.setCursorPos(w - 6, 1)
+            topWin.write(textutils.formatTime(os.time(), true))
+            sleep(0.5)
+            if not running then break end
+        end
+    end
+end
+
+-- 7. ОБРАБОТЧИК КЛИКОВ
+local function inputTask()
+    while running do
         local ev, btn, x, y = os.pullEvent("mouse_click")
-        
         if y == h then
             if x >= 1 and x <= 6 then activeTab = "HOME"
             elseif x >= 8 and x <= 13 then activeTab = "FILE"
@@ -176,7 +196,7 @@ local function mainLoop()
             elseif x >= 22 and x <= 27 then activeTab = "CONF" end
             
             if activeTab == "SHLL" then
-                drawInterface() -- Принудительно рисуем перед входом
+                drawUI() -- Мгновенно подсветить таскбар
                 local old = term.redirect(mainWin)
                 term.setBackgroundColor(colors.black)
                 term.clear() term.setCursorPos(1,1)
@@ -217,10 +237,10 @@ local function mainLoop()
     end
 end
 
--- 8. ИСПОЛНЕНИЕ
+-- 8. СТАРТ
 bootAnim()
 systemAuth()
-parallel.waitForAny(clockTask, mainLoop)
+parallel.waitForAny(renderTask, inputTask)
 
 term.setBackgroundColor(colors.black)
 term.clear()
