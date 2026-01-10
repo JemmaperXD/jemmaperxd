@@ -1,7 +1,7 @@
--- ameOs v20.0 [RIGHT SLIM SIDEBAR 2026]
+-- ameOs v21.0 [FINAL STABLE 2026]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
-local taskW = 6 -- Ультра-узкая панель справа
+local sideW = 5 -- Компактная панель слева
 local running = true
 local activeTab = "Home"
 local currentPath = "/"
@@ -32,23 +32,35 @@ local function loadSettings()
     end
 end
 
--- 2. ПЛАВНАЯ АНИМАЦИЯ (Двойная буферизация)
+-- 2. ПЛАВНАЯ АНИМАЦИЯ (Без блокировки)
 local function bootAnim()
-    local buf = window.create(term.current(), 1, 1, w, h)
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
     local angle = 0
     for f = 1, 40 do
-        buf.setBackgroundColor(colors.black)
-        buf.clear()
-        buf.setTextColor(colors.gray)
-        buf.setCursorPos(cx-2, cy-1) buf.write("#####")
-        buf.setTextColor(colors.cyan)
+        term.setBackgroundColor(colors.black)
+        term.clear()
+        
+        -- Кольцо
+        term.setTextColor(colors.gray)
+        term.setCursorPos(cx-2, cy-1) term.write("#####")
+        term.setCursorPos(cx-3, cy)   term.write("#     #")
+        term.setCursorPos(cx-2, cy+1) term.write("#####")
+        
+        -- Точки Lineage
+        term.setTextColor(colors.cyan)
         for i = 1, 3 do
             local a = angle + (i * 2.1)
-            local dx, dy = math.floor(math.cos(a)*2.5+0.5), math.floor(math.sin(a)*1.5+0.5)
-            buf.setCursorPos(cx+dx, cy+dy) buf.write("o")
+            local dx = math.floor(math.cos(a)*2.5+0.5)
+            local dy = math.floor(math.sin(a)*1.5+0.5)
+            term.setCursorPos(cx+dx, cy+dy) term.write("o")
         end
-        buf.setVisible(true) buf.setVisible(false)
+        
+        -- Бар
+        term.setCursorPos(cx-5, cy+4)
+        term.setTextColor(colors.gray)
+        local b = math.floor((f/40)*10)
+        term.write("["..string.rep("=",b)..string.rep(" ",10-b).."]")
+        
         angle = angle + 0.3
         sleep(0.05)
     end
@@ -59,17 +71,18 @@ local function systemAuth()
     loadSettings()
     term.setBackgroundColor(colors.gray)
     term.clear()
+    term.setTextColor(colors.white)
     if not settings.isRegistered then
-        term.setCursorPos(w/2-4, h/2-2) print("HELLO")
-        term.setCursorPos(w/2-8, h/2) write("Name: ") settings.user = read()
-        term.setCursorPos(w/2-8, h/2+1) write("Pass: ") settings.pass = read("*")
+        term.setCursorPos(w/2-6, h/2-2) term.write("REGISTRATION")
+        term.setCursorPos(w/2-8, h/2)   term.write("Name: ") settings.user = read()
+        term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") settings.pass = read("*")
         settings.isRegistered = true
         saveSettings()
     else
         while true do
             term.setBackgroundColor(colors.gray) term.clear()
-            term.setCursorPos(w/2-6, h/2-1) print("USER: "..settings.user)
-            term.setCursorPos(w/2-8, h/2+1) write("Pass: ")
+            term.setCursorPos(w/2-6, h/2-1) term.write("LOGIN: "..settings.user)
+            term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ")
             if read("*") == settings.pass then break end
         end
     end
@@ -78,20 +91,19 @@ local function systemAuth()
     currentPath = home
 end
 
--- 4. ГЛАВНОЕ ПРИЛОЖЕНИЕ
+-- 4. ГЛАВНЫЙ ИНТЕРФЕЙС
 local function mainApp()
-    -- Окна: контент слева, панель справа
-    local topWin = window.create(term.current(), 1, 1, w - taskW, 1)
-    local mainWin = window.create(term.current(), 1, 2, w - taskW, h - 1)
-    local taskWin = window.create(term.current(), w - taskW + 1, 1, taskW, h)
+    local taskWin = window.create(term.current(), 1, 1, sideW, h)
+    local topWin = window.create(term.current(), sideW + 1, 1, w - sideW, 1)
+    local mainWin = window.create(term.current(), sideW + 1, 2, w - sideW, h - 1)
     
     local fileList = {}
-    local menu = { {n="Home", s="Home"}, {n="Files", s="File"}, {n="Shell", s="Shll"}, {n="Set", s="Conf"} }
+    local menu = { {n="Home", s="Hm"}, {n="Files", s="Fl"}, {n="Shell", s="Sh"}, {n="Set", s="Cf"} }
 
     while running do
         local theme = themes[settings.themeIndex]
         
-        -- Панель задач (Справа)
+        -- Taskbar (СЛЕВА)
         taskWin.setBackgroundColor(colors.black)
         taskWin.clear()
         for i, m in ipairs(menu) do
@@ -103,27 +115,26 @@ local function mainApp()
                 taskWin.setBackgroundColor(colors.black)
                 taskWin.setTextColor(colors.white)
             end
-            taskWin.write(" "..m.s.." ")
+            taskWin.write(" "..m.s.."  ")
         end
         taskWin.setBackgroundColor(colors.black)
         taskWin.setTextColor(colors.yellow)
-        taskWin.setCursorPos(1, h) taskWin.write(textutils.formatTime(os.time(),true):sub(1,taskW))
+        taskWin.setCursorPos(1, h) taskWin.write(textutils.formatTime(os.time(),true):sub(1,sideW))
 
-        -- Верх
+        -- Top
         topWin.setBackgroundColor(theme.accent)
         topWin.setTextColor(theme.text)
         topWin.clear()
-        topWin.setCursorPos(2, 1) topWin.write("ameOs")
+        topWin.setCursorPos(2, 1) topWin.write("ameOs | " .. activeTab)
 
-        -- Контент
+        -- Main
         mainWin.setBackgroundColor(theme.bg)
         mainWin.setTextColor(theme.text)
         mainWin.clear()
 
         if activeTab == "Home" then
             mainWin.setCursorPos(2, 2) mainWin.write("User: " .. settings.user)
-            mainWin.setCursorPos(2, 4) mainWin.setTextColor(colors.gray)
-            mainWin.write("Dir: " .. getHomeDir())
+            mainWin.setCursorPos(2, 4) mainWin.write("Home: " .. getHomeDir())
         elseif activeTab == "Files" then
             mainWin.setBackgroundColor(colors.black)
             mainWin.clear()
@@ -136,7 +147,7 @@ local function mainApp()
                 mainWin.setCursorPos(1, i+1)
                 local isD = fs.isDir(fs.combine(currentPath, n))
                 mainWin.setTextColor(isD and colors.cyan or colors.white)
-                mainWin.write((isD and "> " or "  ") .. n:sub(1, w-taskW-2))
+                mainWin.write((isD and "> " or "  ") .. n:sub(1, w-sideW-2))
             end
         elseif activeTab == "Shell" then
             mainWin.setVisible(true)
@@ -147,14 +158,14 @@ local function mainApp()
             activeTab = "Home"
         elseif activeTab == "Set" then
             mainWin.setCursorPos(1, 2) mainWin.write(" Theme: "..theme.name)
-            mainWin.setCursorPos(1, 4) mainWin.write(" [ NEXT ]")
+            mainWin.setCursorPos(1, 4) mainWin.write(" [ NEXT THEME ]")
             mainWin.setCursorPos(1, 6) mainWin.setTextColor(colors.red)
-            mainWin.write(" [ EXIT ]")
+            mainWin.write(" [ SHUTDOWN ]")
         end
 
         local ev, btn, x, y = os.pullEvent()
         if ev == "mouse_click" then
-            if x > w - taskW then
+            if x <= sideW then
                 local row = math.floor(y/3)
                 if row >= 1 and row <= 4 then activeTab = menu[row].n end
             elseif activeTab == "Files" and y > 2 then
@@ -169,15 +180,17 @@ local function mainApp()
                         term.redirect(old)
                     end
                 end
-            elseif activeTab == "Set" then
-                if y == 5 then settings.themeIndex = (settings.themeIndex % #themes) + 1 saveSettings()
-                elseif y == 7 then running = false end
+            elseif activeTab == "Set" and y == 4 then
+                settings.themeIndex = (settings.themeIndex % #themes) + 1
+                saveSettings()
+            elseif activeTab == "Set" and y == 6 then
+                running = false
             end
         end
     end
 end
 
--- 5. СТАРТ
+-- 5. RUN
 bootAnim()
 systemAuth()
 pcall(mainApp)
