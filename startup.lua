@@ -1,4 +1,4 @@
--- ameOs v33.3 [STABLE FINAL 2026]
+-- ameOs v32.8 [PRE-CONTEXT MENU STABLE]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -25,10 +25,11 @@ local function saveSettings()
     f.close()
 end
 
--- 3. АНИМАЦИЯ FUSION (ВОЗВРАЩЕНА)
+-- 3. АНИМАЦИЯ ЗАГРУЗКИ FUSION
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 1)
     for i = 1, 40 do
+        local t = os.startTimer(0.05)
         term.setBackgroundColor(colors.black)
         term.clear()
         term.setTextColor(colors.cyan)
@@ -41,12 +42,12 @@ local function bootAnim()
         term.setCursorPos(cx-2, cy+4)
         term.setTextColor(colors.white)
         term.write("ameOS")
-        sleep(0.05)
+        repeat local _, id = os.pullEvent("timer") until id == t
     end
 end
 
--- 4. ВХОД В СИСТЕМУ
-local function systemAuth()
+-- 4. АВТОРИЗАЦИЯ
+local function auth()
     if fs.exists(SETTINGS_PATH) then
         local f = fs.open(SETTINGS_PATH, "r")
         settings = textutils.unserialize(f.readAll()) or settings
@@ -72,7 +73,7 @@ local function systemAuth()
     term.setCursorBlink(false)
 end
 
--- 5. ОТРИСОВКА (FIXED CLOCK)
+-- 5. ОТРИСОВКА
 local function drawUI()
     local theme = themes[settings.themeIndex]
     
@@ -87,26 +88,26 @@ local function drawUI()
         taskWin.write(" "..m.." ")
     end
 
-    -- Top
+    -- Top Bar
     topWin.setBackgroundColor(theme.accent)
     topWin.setTextColor(theme.text)
     topWin.clear()
     topWin.setCursorPos(2, 1) topWin.write("ameOs | "..activeTab)
     topWin.setCursorPos(w-6, 1) topWin.write(textutils.formatTime(os.time(), true))
 
-    -- Main
+    -- Main Window
     mainWin.setBackgroundColor(theme.bg)
     mainWin.setTextColor(theme.text)
     mainWin.clear()
 
     if activeTab == "HOME" then
-        local path = fs.combine("/.User", "."..settings.user)
-        if not fs.exists(path) then fs.makeDir(path) end
-        local files = fs.list(path)
+        local p = fs.combine("/.User", "."..settings.user)
+        if not fs.exists(p) then fs.makeDir(p) end
+        local files = fs.list(p)
         for i, n in ipairs(files) do
             local col, row = ((i-1)%3)*8+2, math.floor((i-1)/3)*3+1
             mainWin.setCursorPos(col, row)
-            mainWin.setTextColor(fs.isDir(fs.combine(path, n)) and colors.cyan or colors.yellow)
+            mainWin.setTextColor(fs.isDir(fs.combine(p, n)) and colors.cyan or colors.yellow)
             mainWin.write("[#]")
             mainWin.setCursorPos(col-1, row+1)
             mainWin.setTextColor(colors.white)
@@ -134,18 +135,15 @@ local function drawUI()
     end
 end
 
--- 6. ОБРАБОТЧИК
-local function main()
+-- 6. ГЛАВНЫЙ ЦИКЛ
+local function osLoop()
     drawUI()
-    local clockTimer = os.startTimer(0.5)
-    
+    local clockTimer = os.startTimer(1)
     while running do
         local ev, p1, p2, p3 = os.pullEvent()
-        
         if ev == "timer" and p1 == clockTimer then
             drawUI()
-            clockTimer = os.startTimer(0.5)
-            
+            clockTimer = os.startTimer(1)
         elseif ev == "mouse_click" then
             local x, y = p2, p3
             if y == h then
@@ -187,24 +185,22 @@ local function main()
     end
 end
 
--- 7. ПОСЛЕДОВАТЕЛЬНЫЙ ЗАПУСК
+-- 7. ЗАПУСК
 bootAnim()
-systemAuth()
+auth()
 currentPath = fs.combine("/.User", "."..settings.user)
 if not fs.exists(currentPath) then fs.makeDir(currentPath) end
 
-main()
+osLoop()
 
--- ЛОГИКА ОБНОВЛЕНИЯ ПОСЛЕ ВЫХОДА ИЗ ЦИКЛА
+-- ПОСТ-ПРОЦЕССЫ
 if updateMode then
     term.setBackgroundColor(colors.black)
     term.clear()
     term.setCursorPos(1,1)
-    print("Updating startup.lua...")
+    print("Updating...")
     if fs.exists("startup.lua") then fs.delete("startup.lua") end
     shell.run("wget", "https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua", "startup.lua")
-    print("Rebooting...")
-    sleep(1)
     os.reboot()
 end
 
