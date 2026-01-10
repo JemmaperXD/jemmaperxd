@@ -1,7 +1,6 @@
--- ameOs v23.0 [COMPLETE REPAIR & STABLE]
+-- ameOs v25.0 [BOTTOM BAR STABLE 2026]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
-local sideW = 6 -- Панель слева (4 символа + отступы)
 local running = true
 local activeTab = "HOME"
 local currentPath = "/"
@@ -14,7 +13,7 @@ local themes = {
 }
 local settings = { themeIndex = 1, user = "User", pass = "", isRegistered = false }
 
--- 2. СИСТЕМА СОХРАНЕНИЯ
+-- 2. СИСТЕМА
 if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end
 local function getHomeDir() return fs.combine("/.User", "." .. settings.user) end
 
@@ -33,30 +32,44 @@ local function loadSettings()
     end
 end
 
--- 3. АНИМАЦИЯ (Без лагов)
+-- 3. АНИМАЦИЯ (15 сек, круг в конце)
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
+    local duration = 15
+    local start = os.clock()
     local angle = 0
-    for f = 1, 35 do
+    while true do
+        local elapsed = os.clock() - start
+        if elapsed >= duration then break end
         term.setBackgroundColor(colors.black)
         term.clear()
-        term.setTextColor(colors.gray)
-        term.setCursorPos(cx-2, cy-1) term.write("#####")
-        term.setCursorPos(cx-3, cy)   term.write("#     #")
-        term.setCursorPos(cx-2, cy+1) term.write("#####")
-        term.setTextColor(colors.cyan)
-        for i = 1, 3 do
-            local a = angle + (i * 2.1)
-            local dx = math.floor(math.cos(a)*2.5+0.5)
-            local dy = math.floor(math.sin(a)*1.5+0.5)
-            term.setCursorPos(cx+dx, cy+dy) term.write("o")
+        if elapsed > 11 then
+            term.setTextColor(colors.gray)
+            term.setCursorPos(cx-2, cy-1) term.write("#####")
+            term.setCursorPos(cx-3, cy)   term.write("#     #")
+            term.setCursorPos(cx-2, cy+1) term.write("#####")
+            term.setTextColor(colors.cyan)
+            for i = 1, 3 do
+                local a = angle + (i * 2.1)
+                local dx = math.floor(math.cos(a)*2.5+0.5)
+                local dy = math.floor(math.sin(a)*1.5+0.5)
+                term.setCursorPos(cx+dx, cy+dy) term.write("o")
+            end
         end
-        angle = angle + 0.3
+        local barLen = 14
+        local progress = math.floor((elapsed / duration) * barLen)
+        term.setCursorPos(w/2 - barLen/2, cy + 5)
+        term.setTextColor(colors.gray)
+        term.write("["..string.rep("=", progress)..string.rep(" ", barLen-progress).."]")
+        term.setCursorPos(w/2 - 2, h - 1)
+        term.setTextColor(colors.white)
+        term.write("ameOS")
+        angle = angle + 0.4
         sleep(0.1)
     end
 end
 
--- 4. ВХОД И ПРОВЕРКА ПАПОК
+-- 4. АВТОРИЗАЦИЯ
 local function systemAuth()
     loadSettings()
     term.setBackgroundColor(colors.gray)
@@ -80,50 +93,41 @@ local function systemAuth()
     currentPath = home
 end
 
--- 5. ГЛАВНЫЙ ИНТЕРФЕЙС
+-- 5. ГЛАВНОЕ ПРИЛОЖЕНИЕ
 local function mainApp()
-    local taskWin = window.create(term.current(), 1, 1, sideW, h)
-    local topWin = window.create(term.current(), sideW + 1, 1, w - sideW, 1)
-    local mainWin = window.create(term.current(), sideW + 1, 2, w - sideW, h - 1)
+    local topWin = window.create(term.current(), 1, 1, w, 1)
+    local mainWin = window.create(term.current(), 1, 2, w, h - 2)
+    local taskWin = window.create(term.current(), 1, h, w, 1)
     
     local fileList = {}
-    local menu = { {n="HOME", s="HOME"}, {n="FILE", s="FILE"}, {n="SHLL", s="SHLL"}, {n="CONF", s="CONF"} }
+    local menu = { {n="HOME", x=1}, {n="FILE", x=8}, {n="SHLL", x=15}, {n="CONF", x=22} }
 
     while running do
         local theme = themes[settings.themeIndex]
         
-        -- Taskbar (СЛЕВА)
+        -- Taskbar (ВНИЗУ)
         taskWin.setBackgroundColor(colors.black)
         taskWin.clear()
         for i, m in ipairs(menu) do
-            taskWin.setCursorPos(1, i*3)
-            if activeTab == m.n then
-                taskWin.setBackgroundColor(theme.accent)
-                taskWin.setTextColor(theme.text)
-            else
-                taskWin.setBackgroundColor(colors.black)
-                taskWin.setTextColor(colors.white)
-            end
-            taskWin.write(" "..m.s.." ")
+            taskWin.setCursorPos(m.x, 1)
+            taskWin.setBackgroundColor(activeTab == m.n and theme.accent or colors.black)
+            taskWin.setTextColor(activeTab == m.n and theme.text or colors.white)
+            taskWin.write(" "..m.n.." ")
         end
-        taskWin.setBackgroundColor(colors.black)
-        taskWin.setTextColor(colors.yellow)
-        taskWin.setCursorPos(1, h) taskWin.write(textutils.formatTime(os.time(), true):sub(1, sideW))
 
-        -- Top Bar
+        -- Top / Main
         topWin.setBackgroundColor(theme.accent)
         topWin.setTextColor(theme.text)
         topWin.clear()
         topWin.setCursorPos(2, 1) topWin.write("ameOs | " .. activeTab)
+        topWin.setCursorPos(w-6, 1) topWin.write(textutils.formatTime(os.time(), true))
 
-        -- Content Window
         mainWin.setBackgroundColor(theme.bg)
         mainWin.setTextColor(theme.text)
         mainWin.clear()
 
         if activeTab == "HOME" then
-            mainWin.setCursorPos(2, 2) mainWin.write("User: " .. settings.user)
-            mainWin.setCursorPos(2, 4) mainWin.write("Path: " .. currentPath)
+            mainWin.setCursorPos(2, 2) mainWin.write("Welcome, " .. settings.user)
         elseif activeTab == "FILE" then
             mainWin.setBackgroundColor(colors.black)
             mainWin.setTextColor(colors.yellow)
@@ -131,11 +135,11 @@ local function mainApp()
             fileList = fs.list(currentPath)
             if currentPath ~= "/" then table.insert(fileList, 1, "..") end
             for i, n in ipairs(fileList) do
-                if i > h-3 then break end
+                if i > h-4 then break end
                 mainWin.setCursorPos(1, i+1)
                 local isD = fs.isDir(fs.combine(currentPath, n))
                 mainWin.setTextColor(isD and colors.cyan or colors.white)
-                mainWin.write((isD and "> " or "  ") .. n:sub(1, w-sideW-2))
+                mainWin.write((isD and "> " or "  ") .. n)
             end
         elseif activeTab == "SHLL" then
             mainWin.setVisible(true)
@@ -143,8 +147,16 @@ local function mainApp()
             term.setBackgroundColor(colors.black)
             term.setTextColor(colors.white)
             term.clear() term.setCursorPos(1,1)
-            print("Terminal Mode. Type 'exit'")
-            shell.run("shell")
+            print("Shell Mode. Click Bottom Bar to Exit.")
+            parallel.waitForAny(
+                function() shell.run("shell") end,
+                function()
+                    while true do
+                        local e, b, x, y = os.pullEvent("mouse_click")
+                        if y == h then return end
+                    end
+                end
+            )
             term.redirect(old)
             activeTab = "HOME"
         elseif activeTab == "CONF" then
@@ -154,31 +166,29 @@ local function mainApp()
             mainWin.write(" [ SHUTDOWN ]")
         end
 
-        -- Event Handler
-        local ev, btn, x, y = os.pullEvent()
-        if ev == "mouse_click" then
-            if x <= sideW then -- Клик по таскбару
-                local row = math.floor(y/3)
-                if row >= 1 and row <= 4 then activeTab = menu[row].n end
-            elseif activeTab == "FILE" and y > 2 then -- Проводник
-                local sel = fileList[y-2]
-                if sel then
-                    local p = fs.combine(currentPath, sel)
-                    if fs.isDir(p) then currentPath = p 
-                    else 
-                        local old = term.redirect(mainWin)
-                        shell.run("edit", p)
-                        term.redirect(old)
-                    end
-                end
-            elseif activeTab == "CONF" then
-                if y == 5 then 
-                    settings.themeIndex = (settings.themeIndex % #themes) + 1 
-                    saveSettings()
-                elseif y == 7 then 
-                    running = false 
+        -- Events
+        local ev, btn, x, y = os.pullEvent("mouse_click")
+        if y == h then
+            if x >= 1 and x <= 6 then activeTab = "HOME"
+            elseif x >= 8 and x <= 13 then activeTab = "FILE"
+            elseif x >= 15 and x <= 20 then activeTab = "SHLL"
+            elseif x >= 22 and x <= 27 then activeTab = "CONF" end
+        elseif activeTab == "FILE" and y > 2 and y < h then
+            local sel = fileList[y-2]
+            if sel then
+                local p = fs.combine(currentPath, sel)
+                if fs.isDir(p) then currentPath = p 
+                else 
+                    local old = term.redirect(mainWin)
+                    shell.run("edit", p)
+                    term.redirect(old)
                 end
             end
+        elseif activeTab == "CONF" then
+            if y == 5 then 
+                settings.themeIndex = (settings.themeIndex % #themes) + 1
+                saveSettings() 
+            elseif y == 7 then running = false end
         end
     end
 end
@@ -186,16 +196,7 @@ end
 -- 6. START
 bootAnim()
 systemAuth()
-local ok, err = pcall(mainApp)
-if not ok then
-    term.redirect(term.native())
-    term.setBackgroundColor(colors.red)
-    term.clear()
-    term.setCursorPos(1,1)
-    print("System Error: "..err)
-    sleep(5)
-end
-
+pcall(mainApp)
 term.setBackgroundColor(colors.black)
 term.clear()
 term.setCursorPos(1,1)
