@@ -8,9 +8,8 @@ local currentPath = "/"
 
 term.setCursorBlink(false)
 
--- 1. ТЕМЫ
+-- 1. ТЕМЫ (Удалена Dark Cyan)
 local themes = {
-    { name = "Dark Cyan", bg = colors.blue,  accent = colors.cyan, text = colors.white },
     { name = "Night",     bg = colors.black, accent = colors.gray, text = colors.lightGray },
     { name = "Hacker",    bg = colors.black, accent = colors.lime, text = colors.lime }
 }
@@ -31,7 +30,11 @@ local function loadSettings()
         local f = fs.open(SETTINGS_PATH, "r")
         local data = f.readAll() f.close()
         local decoded = textutils.unserialize(data)
-        if decoded then settings = decoded end
+        if decoded then 
+            settings = decoded 
+            -- Проверка, чтобы индекс не вылетел за пределы после удаления темы
+            if settings.themeIndex > #themes then settings.themeIndex = 1 end
+        end
     end
 end
 
@@ -61,7 +64,7 @@ local function updateSystem(win)
     end
 end
 
--- 3. АНИМАЦИЯ (15 сек, Слияние в конце)
+-- 3. АНИМАЦИЯ
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
     local duration = 15
@@ -75,18 +78,15 @@ local function bootAnim()
         term.setBackgroundColor(colors.black)
         term.clear()
         
-        -- Параметры слияния (последние 3 секунды)
         local fusion = 1.0
         if elapsed > 12 then
             fusion = math.max(0, 1 - (elapsed - 12) / 3)
-            -- Отрисовка кольца
             term.setTextColor(colors.gray)
             term.setCursorPos(cx-2, cy-1) term.write("#####")
             term.setCursorPos(cx-3, cy)   term.write("#     #")
             term.setCursorPos(cx-2, cy+1) term.write("#####")
         end
         
-        -- Вращающиеся точки с динамическим радиусом
         term.setTextColor(colors.cyan)
         local radiusX = 2.5 * fusion
         local radiusY = 1.5 * fusion
@@ -96,10 +96,9 @@ local function bootAnim()
             local dx = math.floor(math.cos(a) * radiusX + 0.5)
             local dy = math.floor(math.sin(a) * radiusY + 0.5)
             term.setCursorPos(cx + dx, cy + dy)
-            term.write(fusion > 0.2 and "o" or "@") -- Точка меняет вид при слиянии
+            term.write(fusion > 0.2 and "o" or "@")
         end
         
-        -- Прогресс бар
         local barLen = 14
         local progress = math.floor((elapsed / duration) * barLen)
         term.setCursorPos(w/2 - barLen/2, cy + 4)
@@ -150,9 +149,13 @@ local function mainApp()
     local fileList, homeFiles = {}, {}
     local menu = { {n="HOME", x=1}, {n="FILE", x=8}, {n="SHLL", x=15}, {n="CONF", x=22} }
 
+    -- Таймер для обновления часов
+    local clockTimer = os.startTimer(1)
+
     while running do
         local theme = themes[settings.themeIndex]
         
+        -- Рендеринг интерфейса
         taskWin.setBackgroundColor(colors.black)
         taskWin.clear()
         for _, m in ipairs(menu) do
@@ -200,26 +203,6 @@ local function mainApp()
                 mainWin.setTextColor(isD and colors.cyan or colors.white)
                 mainWin.write((isD and "> " or "  ") .. n)
             end
-        elseif activeTab == "SHLL" then
-            mainWin.setVisible(true)
-            local old = term.redirect(mainWin)
-            term.setBackgroundColor(colors.black)
-            term.setTextColor(colors.white)
-            term.setCursorBlink(true)
-            term.clear() term.setCursorPos(1,1)
-            print("Shell Mode. Click Taskbar to exit.")
-            parallel.waitForAny(
-                function() shell.run("shell") end,
-                function()
-                    while true do
-                        local _, _, x, y = os.pullEvent("mouse_click")
-                        if y == h then os.queueEvent("mouse_click", 1, x, y) return end
-                    end
-                end
-            )
-            term.setCursorBlink(false)
-            term.redirect(old)
-            activeTab = "HOME"
         elseif activeTab == "CONF" then
             mainWin.setCursorPos(1, 2) mainWin.write(" Theme: "..theme.name)
             mainWin.setCursorPos(1, 4) mainWin.write(" [ NEXT THEME ]")
@@ -229,44 +212,73 @@ local function mainApp()
             mainWin.write(" [ SHUTDOWN ]")
         end
 
-        local ev, btn, x, y = os.pullEvent("mouse_click")
-        if y == h then
-            if x >= 1 and x <= 6 then activeTab = "HOME"
-            elseif x >= 8 and x <= 13 then activeTab = "FILE"
-            elseif x >= 15 and x <= 20 then activeTab = "SHLL"
-            elseif x >= 22 and x <= 27 then activeTab = "CONF" end
-        elseif activeTab == "HOME" and y > 1 and y < h then
-            local colIdx = math.floor((x - 2) / 8) + 1
-            local rowIdx = math.floor((y - 2) / 3) + 1
-            local fileIdx = (rowIdx - 1) * 3 + colIdx
-            if homeFiles[fileIdx] then
-                local p = fs.combine(getHomeDir(), homeFiles[fileIdx])
-                if fs.isDir(p) then activeTab = "FILE" currentPath = p
-                else 
-                    local old = term.redirect(mainWin)
-                    term.setCursorBlink(true)
-                    shell.run("edit", p)
-                    term.setCursorBlink(false)
-                    term.redirect(old)
+        -- ОЖИДАНИЕ СОБЫТИЙ (Исправлено для часов)
+        local event, p1, p2, p3 = os.pullEvent()
+        
+        if event == "mouse_click" then
+            local btn, x, y = p1, p2, p3
+            if y == h then
+                if x >= 1 and x <= 6 then activeTab = "HOME"
+                elseif x >= 8 and x <= 13 then activeTab = "FILE"
+                elseif x >= 15 and x <= 20 then activeTab = "SHLL"
+                elseif x >= 22 and x <= 27 then activeTab = "CONF" 
                 end
-            end
-        elseif activeTab == "FILE" and y > 2 and y < h then
-            local sel = fileList[y-2]
-            if sel then
-                local p = fs.combine(currentPath, sel)
-                if fs.isDir(p) then currentPath = p 
-                else 
-                    local old = term.redirect(mainWin)
-                    term.setCursorBlink(true)
-                    shell.run("edit", p)
-                    term.setCursorBlink(false)
-                    term.redirect(old)
+            elseif activeTab == "HOME" and y > 1 and y < h then
+                local colIdx = math.floor((x - 2) / 8) + 1
+                local rowIdx = math.floor((y - 2) / 3) + 1
+                local fileIdx = (rowIdx - 1) * 3 + colIdx
+                if homeFiles[fileIdx] then
+                    local p = fs.combine(getHomeDir(), homeFiles[fileIdx])
+                    if fs.isDir(p) then activeTab = "FILE" currentPath = p
+                    else 
+                        local old = term.redirect(mainWin)
+                        shell.run("edit", p)
+                        term.redirect(old)
+                    end
                 end
+            elseif activeTab == "FILE" and y > 2 and y < h then
+                local sel = fileList[y-2]
+                if sel then
+                    local p = fs.combine(currentPath, sel)
+                    if fs.isDir(p) then currentPath = p 
+                    else 
+                        local old = term.redirect(mainWin)
+                        shell.run("edit", p)
+                        term.redirect(old)
+                    end
+                end
+            elseif activeTab == "CONF" then
+                if y == 5 then 
+                    settings.themeIndex = (settings.themeIndex % #themes) + 1 
+                    saveSettings() 
+                elseif y == 7 then updateSystem(mainWin)
+                elseif y == 9 then running = false end
             end
-        elseif activeTab == "CONF" then
-            if y == 5 then settings.themeIndex = (settings.themeIndex % #themes) + 1 saveSettings() 
-            elseif y == 7 then updateSystem(mainWin)
-            elseif y == 9 then running = false end
+        
+        elseif event == "timer" and p1 == clockTimer then
+            -- Перезапуск таймера для следующего обновления
+            clockTimer = os.startTimer(1)
+        end
+
+        -- Спец. обработка для SHLL (вынесена из общего цикла отрисовки)
+        if activeTab == "SHLL" then
+            mainWin.setVisible(true)
+            local old = term.redirect(mainWin)
+            term.setBackgroundColor(colors.black)
+            term.setTextColor(colors.white)
+            term.clear() term.setCursorPos(1,1)
+            print("Shell Mode. Click Taskbar to exit.")
+            parallel.waitForAny(
+                function() shell.run("shell") end,
+                function()
+                    while true do
+                        local _, _, mx, my = os.pullEvent("mouse_click")
+                        if my == h then os.queueEvent("mouse_click", 1, mx, my) return end
+                    end
+                end
+            )
+            term.redirect(old)
+            activeTab = "HOME"
         end
     end
 end
@@ -277,5 +289,5 @@ systemAuth()
 pcall(mainApp)
 term.setBackgroundColor(colors.black)
 term.clear()
-term.setCursorBlink(true)
+term.setCursorPos(1,1)
 print("ameOs v32.0 closed.")
