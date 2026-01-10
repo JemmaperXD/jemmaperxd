@@ -1,7 +1,4 @@
--- ameOs v11.0: Ultimate Pocket Edition
--- Дата выпуска: 10.01.2026
--- Особенности: Вертикальный таскбар, Контекстное меню ПКМ, Защита /.config
-
+-- ameOs v12.0: Boot Animation Fix & Rotating Logo
 local w, h = term.getSize()
 local CONFIG_DIR = "/.config"
 local SETTINGS_PATH = CONFIG_DIR .. "/ame_settings.cfg"
@@ -18,7 +15,7 @@ local themes = {
     { name = "Lineage",   bg = colors.gray,      accent = colors.lime,    text = colors.white }
 }
 
-local settings = { themeIndex = 1, user = "", pass = "", isRegistered = false }
+local settings = { themeIndex = 1, user = "User", pass = "", isRegistered = false }
 
 -- 2. СИСТЕМА ФАЙЛОВ И НАСТРОЕК
 if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end
@@ -38,40 +35,44 @@ local function loadSettings()
     end
 end
 
--- 3. ГРАФИЧЕСКИЕ ОКНА
+-- 3. ОКНА
 local mainWin = window.create(term.current(), 1, 2, w - taskbarW, h - 1)
 local topWin = window.create(term.current(), 1, 1, w - taskbarW, 1)
 local taskWin = window.create(term.current(), w - taskbarW + 1, 1, taskbarW, h)
 
--- 4. АНИМАЦИЯ ЗАГРУЗКИ (5 СЕКУНД)
-local function drawLineageLogo(x, y, color)
-    term.setTextColor(color)
-    term.setCursorPos(x+2, y);   print("#####")
-    term.setCursorPos(x+1, y+1); print("#     #")
-    term.setCursorPos(x,   y+2); print("#  o o o #")
-    term.setCursorPos(x+1, y+3); print("#     #")
-    term.setCursorPos(x+2, y+4); print("#####")
-end
-
+-- 4. ВРАЩАЮЩАЯСЯ АНИМАЦИЯ (5 СЕКУНД)
 local function bootAnim()
-    local centerX, centerY = math.floor(w/2 - 4), math.floor(h/2 - 3)
-    local timer = os.startTimer(5)
-    local frame = 0
-    while true do
+    local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
+    local endTime = os.clock() + 5
+    local angle = 0
+    
+    while os.clock() < endTime do
         term.setBackgroundColor(colors.black)
         term.clear()
-        local pulse = (frame % 2 == 0) and colors.cyan or colors.blue
-        drawLineageLogo(centerX, centerY, pulse)
         
-        term.setCursorPos(centerX-1, centerY+6)
+        -- Рисуем статичное кольцо
         term.setTextColor(colors.gray)
-        local bar = math.min(math.floor((frame/25)*10), 10)
-        write("["..string.rep("=", bar)..string.rep(" ", 10-bar).."]")
+        term.setCursorPos(cx-2, cy-1) print("#####")
+        term.setCursorPos(cx-3, cy)   print("#     #")
+        term.setCursorPos(cx-3, cy+1) print("#     #")
+        term.setCursorPos(cx-2, cy+2) print("#####")
         
-        frame = frame + 1
-        local ev, id = os.pullEvent()
-        if ev == "timer" and id == timer then break end
-        if ev ~= "timer" then sleep(0.1) end
+        -- Рассчитываем позиции 3 точек (вращение)
+        term.setTextColor(colors.cyan)
+        for i = 1, 3 do
+            local a = angle + (i * (math.pi * 2 / 3))
+            local dx = math.floor(math.cos(a) * 2.5 + 0.5)
+            local dy = math.floor(math.sin(a) * 1.5 + 0.5)
+            term.setCursorPos(cx + dx, cy + 0.5 + dy)
+            term.write("o")
+        end
+        
+        term.setCursorPos(w/2 - 2, h - 2)
+        term.setTextColor(colors.white)
+        term.write("ameOS")
+        
+        angle = angle + 0.3
+        sleep(0.05) -- Небольшая задержка для плавности
     end
 end
 
@@ -89,6 +90,7 @@ local function systemAuth()
     else
         while true do
             term.setBackgroundColor(colors.gray) term.clear()
+            term.setTextColor(colors.white)
             term.setCursorPos(w/2-6, h/2-1) print("LOGIN: "..settings.user)
             term.setCursorPos(w/2-8, h/2+1) write("Pass: ")
             if read("*") == settings.pass then break end
@@ -134,7 +136,7 @@ local function mainApp()
         taskWin.setTextColor(colors.yellow)
         taskWin.setCursorPos(2, h) taskWin.write(textutils.formatTime(os.time(), true))
 
-        -- Top bar & Main
+        -- Top & Main
         topWin.setBackgroundColor(theme.accent)
         topWin.setTextColor(theme.text)
         topWin.clear() topWin.setCursorPos(2,1) topWin.write("ameOs")
@@ -189,12 +191,10 @@ if not ok then
     term.setBackgroundColor(colors.red)
     term.clear()
     term.setCursorPos(1,1)
-    print("CRITICAL ERROR:")
-    print(err)
+    print("FATAL ERROR: "..err)
     sleep(5)
 end
 
 term.setBackgroundColor(colors.black)
 term.clear()
-term.setCursorPos(1,1)
 print("ameOs closed.")
