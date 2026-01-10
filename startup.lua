@@ -1,4 +1,4 @@
--- ameOs v32.0 [FINAL REPAIR 2026]
+-- ameOs v32.5 [SYSTEM UPDATE EDITION]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -17,9 +17,15 @@ local topWin = window.create(term.current(), 1, 1, w, 1)
 local mainWin = window.create(term.current(), 1, 2, w, h - 2)
 local taskWin = window.create(term.current(), 1, h, w, 1)
 
--- 2. СИСТЕМА (Загрузка)
+-- 2. СИСТЕМА
 if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end
 local function getHomeDir() return fs.combine("/.User", "." .. settings.user) end
+
+local function saveSettings()
+    local f = fs.open(SETTINGS_PATH, "w")
+    f.write(textutils.serialize(settings))
+    f.close()
+end
 
 local function loadSettings()
     if fs.exists(SETTINGS_PATH) then
@@ -30,33 +36,26 @@ local function loadSettings()
     end
 end
 
--- 3. ПОЛНАЯ АНИМАЦИЯ FUSION
+-- 3. АНИМАЦИЯ FUSION
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
-    local duration = 8
+    local duration = 5
     local start = os.clock()
     local angle = 0
-    while true do
+    while os.clock() - start < duration do
         local elapsed = os.clock() - start
-        if elapsed >= duration then break end
         term.setBackgroundColor(colors.black)
         term.clear()
         local fusion = 1.0
-        if elapsed > (duration - 3) then
-            fusion = math.max(0, 1 - (elapsed - (duration - 3)) / 3)
-            term.setTextColor(colors.gray)
-            term.setCursorPos(cx-2, cy-1) term.write("#####")
-            term.setCursorPos(cx-3, cy)   term.write("#     #")
-            term.setCursorPos(cx-2, cy+1) term.write("#####")
-        end
+        if elapsed > (duration - 2) then fusion = math.max(0, 1 - (elapsed - (duration - 2)) / 2) end
         term.setTextColor(colors.cyan)
         local rX, rY = 2.5 * fusion, 1.5 * fusion
         for i = 1, 3 do
             local a = angle + (i * 2.1)
             term.setCursorPos(cx + math.floor(math.cos(a)*rX+0.5), cy + math.floor(math.sin(a)*rY+0.5))
-            term.write(fusion > 0.2 and "o" or "@")
+            term.write("o")
         end
-        term.setCursorPos(w/2 - 2, h - 1)
+        term.setCursorPos(cx - 2, h - 1)
         term.setTextColor(colors.white)
         term.write("ameOS")
         angle = angle + 0.4
@@ -64,7 +63,29 @@ local function bootAnim()
     end
 end
 
--- 4. АВТОРИЗАЦИЯ
+-- 4. ОБНОВЛЕНИЕ СИСТЕМЫ
+local function updateSystem()
+    mainWin.setBackgroundColor(colors.black)
+    mainWin.clear()
+    mainWin.setCursorPos(1, 1)
+    mainWin.setTextColor(colors.yellow)
+    mainWin.write(" Connecting to server...")
+    
+    if fs.exists("startup.lua") then fs.delete("startup.lua") end
+    
+    local url = "https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua"
+    shell.run("wget", url, "startup.lua")
+    
+    mainWin.setCursorPos(1, 3)
+    mainWin.setTextColor(colors.lime)
+    mainWin.write(" Update complete!")
+    mainWin.setCursorPos(1, 4)
+    mainWin.write(" Rebooting in 3 seconds...")
+    sleep(3)
+    os.reboot()
+end
+
+-- 5. АВТОРИЗАЦИЯ
 local function auth()
     loadSettings()
     term.setBackgroundColor(colors.gray)
@@ -75,7 +96,7 @@ local function auth()
         term.setCursorPos(w/2-8, h/2) term.write("User: ") settings.user = read()
         term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") settings.pass = read("*")
         settings.isRegistered = true
-        local f = fs.open(SETTINGS_PATH, "w") f.write(textutils.serialize(settings)) f.close()
+        saveSettings()
     else
         while true do
             term.setBackgroundColor(colors.gray) term.clear()
@@ -89,10 +110,9 @@ local function auth()
     if not fs.exists(currentPath) then fs.makeDir(currentPath) end
 end
 
--- 5. ОТРИСОВКА ИНТЕРФЕЙСА
+-- 6. ОТРИСОВКА
 local function drawUI()
     local theme = themes[settings.themeIndex]
-    -- Таскбар
     taskWin.setBackgroundColor(colors.black)
     taskWin.clear()
     local menu = { {n="HOME", x=1}, {n="FILE", x=8}, {n="SHLL", x=15}, {n="CONF", x=22} }
@@ -102,15 +122,12 @@ local function drawUI()
         taskWin.setTextColor(activeTab == m.n and theme.text or colors.white)
         taskWin.write(" "..m.n.." ")
     end
-    -- Верхняя панель (Заголовок)
     topWin.setBackgroundColor(theme.accent)
     topWin.setTextColor(theme.text)
     topWin.clear()
     topWin.setCursorPos(2, 1) topWin.write("ameOs | " .. activeTab)
-    -- Часы (рисуем сразу один раз)
     topWin.setCursorPos(w - 6, 1)
     topWin.write(textutils.formatTime(os.time(), true))
-    -- Контент
     mainWin.setBackgroundColor(theme.bg)
     mainWin.setTextColor(theme.text)
     mainWin.clear()
@@ -139,26 +156,26 @@ local function drawUI()
     elseif activeTab == "CONF" then
         mainWin.setCursorPos(1, 2) mainWin.write(" Theme: "..theme.name)
         mainWin.setCursorPos(1, 4) mainWin.write(" [ NEXT THEME ]")
-        mainWin.setCursorPos(1, 6) mainWin.write(" [ SHUTDOWN ]")
+        mainWin.setCursorPos(1, 6) mainWin.setTextColor(colors.yellow)
+        mainWin.write(" [ UPDATE SYSTEM ]")
+        mainWin.setCursorPos(1, 8) mainWin.setTextColor(theme.text)
+        mainWin.write(" [ SHUTDOWN ]")
     end
 end
 
--- 6. ГЛАВНЫЙ ДВИЖОК (Событийный)
+-- 7. ДВИЖОК
 local function osEngine()
     drawUI()
     local clockTimer = os.startTimer(1)
     while running do
         local event, p1, p2, p3 = os.pullEvent()
-        
         if event == "timer" and p1 == clockTimer then
-            -- ОБНОВЛЕНИЕ ЧАСОВ (БЕЗ CLEAR)
             local theme = themes[settings.themeIndex]
             topWin.setBackgroundColor(theme.accent)
             topWin.setTextColor(theme.text)
             topWin.setCursorPos(w - 6, 1)
             topWin.write(textutils.formatTime(os.time(), true))
             clockTimer = os.startTimer(1)
-
         elseif event == "mouse_click" then
             local x, y = p2, p3
             if y == h then
@@ -166,22 +183,18 @@ local function osEngine()
                 elseif x >= 8 and x <= 13 then activeTab = "FILE"
                 elseif x >= 15 and x <= 20 then activeTab = "SHLL"
                 elseif x >= 22 and x <= 27 then activeTab = "CONF" end
-                
                 if activeTab == "SHLL" then
-                    drawUI() -- Мгновенно перерисовать панель
+                    drawUI()
                     local old = term.redirect(mainWin)
                     term.setBackgroundColor(colors.black)
                     term.clear() term.setCursorPos(1,1)
                     term.setCursorBlink(true)
-                    parallel.waitForAny(
-                        function() shell.run("shell") end,
-                        function()
-                            while true do
-                                local _, _, mx, my = os.pullEvent("mouse_click")
-                                if my == h then os.queueEvent("mouse_click", 1, mx, my) return end
-                            end
+                    parallel.waitForAny(function() shell.run("shell") end, function()
+                        while true do
+                            local _, _, mx, my = os.pullEvent("mouse_click")
+                            if my == h then os.queueEvent("mouse_click", 1, mx, my) return end
                         end
-                    )
+                    end)
                     term.setCursorBlink(false)
                     term.redirect(old)
                     activeTab = "HOME"
@@ -202,21 +215,19 @@ local function osEngine()
                     end
                 end
                 drawUI()
-            elseif activeTab == "CONF" and y == 5 then
-                settings.themeIndex = (settings.themeIndex % #themes) + 1
-                drawUI()
-            elseif activeTab == "CONF" and y == 7 then
-                running = false
+            elseif activeTab == "CONF" then
+                if y == 5 then settings.themeIndex = (settings.themeIndex % #themes) + 1 drawUI()
+                elseif y == 7 then updateSystem()
+                elseif y == 9 then running = false end
             end
         end
     end
 end
 
--- 7. ЗАПУСК
+-- 8. СТАРТ
 bootAnim()
 auth()
 osEngine()
-
 term.setBackgroundColor(colors.black)
 term.clear()
 term.setCursorPos(1,1)
