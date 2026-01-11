@@ -1,10 +1,9 @@
--- ameOs v41.0 [STABLE FINAL]
+-- ameOs v43.0 [FINAL REPAIR: CLOCK & FULL CONTEXT]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
 local activeTab = "HOME"
 local currentPath = "/"
-local clockTimer = nil
 local clipboard = { path = nil }
 
 local themes = {
@@ -66,12 +65,14 @@ end
 -- 3. ГРАФИКА
 local function drawTopBar()
     local theme = themes[settings.themeIndex]
+    local old = term.redirect(topWin)
     topWin.setBackgroundColor(theme.accent)
     topWin.setTextColor(theme.text)
     topWin.clear()
     topWin.setCursorPos(2, 1) topWin.write("ameOs | " .. activeTab)
     topWin.setCursorPos(w - 6, 1)
     topWin.write(textutils.formatTime(os.time(), true))
+    term.redirect(old)
 end
 
 local function drawUI()
@@ -89,6 +90,7 @@ local function drawUI()
     mainWin.setBackgroundColor(theme.bg)
     mainWin.setTextColor(theme.text)
     mainWin.clear()
+    
     if activeTab == "HOME" then
         local home = getHomeDir()
         if not fs.exists(home) then fs.makeDir(home) end
@@ -123,32 +125,26 @@ local function drawUI()
     end
 end
 
--- 4. КОНТЕКСТНОЕ МЕНЮ
-local function showContext(x, y, fileName)
-    local opts = fileName and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}
-    local menuWin = window.create(term.current(), x, y, 12, #opts)
-    menuWin.setBackgroundColor(colors.lightGray)
-    menuWin.setTextColor(colors.black)
+-- 4. ПОЛНОЕ КОНТЕКСТНОЕ МЕНЮ
+local function showContext(mx, my, file)
+    local opts = file and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}
+    local menuWin = window.create(term.current(), mx, my, 12, #opts)
+    menuWin.setBackgroundColor(colors.gray)
+    menuWin.setTextColor(colors.white)
     menuWin.clear()
     for i, o in ipairs(opts) do menuWin.setCursorPos(1, i) menuWin.write(" "..o) end
-    local ev, btn, mx, my = os.pullEvent("mouse_click")
-    if mx >= x and mx <= x+11 and my >= y and my < y+#opts then
-        local choice = opts[my-y+1]
-        local target = (activeTab == "HOME") and getHomeDir() or currentPath
-        if choice == "New File" then
-            mainWin.setCursorPos(1,1) mainWin.write("Name: ")
-            local n = read() if n~="" then fs.open(fs.combine(target, n), "w").close() end
-        elseif choice == "New Folder" then
-            mainWin.setCursorPos(1,1) mainWin.write("Dir: ")
-            local n = read() if n~="" then fs.makeDir(fs.combine(target, n)) end
-        elseif choice == "Delete" then fs.delete(fs.combine(target, fileName))
-        elseif choice == "Rename" then
-            mainWin.setCursorPos(1,1) mainWin.write("New name: ")
-            local n = read() if n~="" then fs.move(fs.combine(target, fileName), fs.combine(target, n)) end
-        elseif choice == "Copy" then clipboard.path = fs.combine(target, fileName)
-        elseif choice == "Paste" and clipboard.path then
-            fs.copy(clipboard.path, fs.combine(target, fs.getName(clipboard.path)))
-        end
+    
+    local _, btn, cx, cy = os.pullEvent("mouse_click")
+    if cx >= mx and cx < mx+12 and cy >= my and cy < my+#opts then
+        local choice = opts[cy-my+1]
+        local path = (activeTab == "HOME") and getHomeDir() or currentPath
+        mainWin.setCursorPos(1,1)
+        if choice == "New File" then mainWin.write("Name: ") local n = read() if n~="" then fs.open(fs.combine(path, n), "w").close() end
+        elseif choice == "New Folder" then mainWin.write("Dir: ") local n = read() if n~="" then fs.makeDir(fs.combine(path, n)) end
+        elseif choice == "Delete" then fs.delete(fs.combine(path, file))
+        elseif choice == "Rename" then mainWin.write("New: ") local n = read() if n~="" then fs.move(fs.combine(path, file), fs.combine(path, n)) end
+        elseif choice == "Copy" then clipboard.path = fs.combine(path, file)
+        elseif choice == "Paste" and clipboard.path then fs.copy(clipboard.path, fs.combine(path, fs.getName(clipboard.path))) end
     end
     drawUI()
 end
@@ -156,15 +152,14 @@ end
 -- 5. ДВИЖОК
 local function osEngine()
     drawUI()
-    clockTimer = os.startTimer(1)
+    local clockT = os.startTimer(1)
     while running do
         local ev, p1, p2, p3 = os.pullEvent()
-        if ev == "timer" and p1 == clockTimer then
-            drawTopBar()
-            clockTimer = os.startTimer(1)
+        if ev == "timer" and p1 == clockT then
+            drawTopBar() clockT = os.startTimer(1)
         elseif ev == "mouse_click" then
             local btn, x, y = p1, p2, p3
-            if y == h then -- ТАСКБАР
+            if y == h then
                 if x >= 1 and x <= 6 then activeTab = "HOME"
                 elseif x >= 8 and x <= 13 then activeTab = "FILE"
                 elseif x >= 15 and x <= 20 then activeTab = "SHLL"
@@ -176,11 +171,11 @@ local function osEngine()
                     term.setCursorBlink(true)
                     parallel.waitForAny(
                         function() shell.run("shell") end,
-                        function() -- Фикс часов в шелле
-                            local t = os.startTimer(1)
+                        function() -- Фикс часов и таскбара
+                            local st = os.startTimer(1)
                             while true do
                                 local e, id, tx, ty = os.pullEvent()
-                                if e == "timer" and id == t then drawTopBar() t = os.startTimer(1)
+                                if e == "timer" and id == st then drawTopBar() st = os.startTimer(1)
                                 elseif e == "mouse_click" and ty == h then os.queueEvent("mouse_click", 1, tx, ty) return end
                             end
                         end
@@ -225,12 +220,11 @@ local function osEngine()
     end
 end
 
--- 6. СТАРТ
+-- 6. LOGIN
 bootAnim()
 loadSettings()
 term.setBackgroundColor(colors.black)
 term.clear()
-term.setCursorBlink(true)
 if not settings.isRegistered then
     term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
     term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") settings.user = read()
@@ -244,5 +238,4 @@ else
         if read("*") == settings.pass then break end
     end
 end
-term.setCursorBlink(false)
 osEngine()
