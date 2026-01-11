@@ -65,6 +65,20 @@ local function getUniquePath(dir, name)
     return path
 end
 
+-- Функция для нормализации пути (исправление проблемы с пропадающим /)
+local function normalizePath(path)
+    if path == "" or path == nil then
+        return "/"
+    end
+    -- Удаляем возможные двойные слэши
+    path = path:gsub("//+", "/")
+    -- Убеждаемся, что путь начинается с /
+    if path:sub(1, 1) ~= "/" then
+        path = "/" .. path
+    end
+    return path
+end
+
 -- 2. BOOT ANIMATION
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
@@ -139,7 +153,7 @@ local function drawUI()
         end
     elseif activeTab == "FILE" then
         mainWin.setCursorPos(1, 1) mainWin.setTextColor(colors.yellow)
-        mainWin.write(" "..currentPath)
+        mainWin.write(" "..normalizePath(currentPath))
         local files = fs.list(currentPath)
         if currentPath ~= "/" then table.insert(files, 1, "..") end
         for i, n in ipairs(files) do
@@ -288,8 +302,18 @@ local function osEngine()
                     showContext(x, y, sel)
                 elseif sel then
                     local p = fs.combine(currentPath, sel)
-                    if fs.isDir(p) then currentPath = p drawUI()
-                    else local old = term.redirect(mainWin) term.setCursorBlink(true) shell.run("edit", p) term.setCursorBlink(false) term.redirect(old) drawUI() end
+                    if fs.isDir(p) then 
+                        -- Используем normalizePath для корректного пути
+                        currentPath = normalizePath(p)
+                        drawUI()
+                    else 
+                        local old = term.redirect(mainWin) 
+                        term.setCursorBlink(true) 
+                        shell.run("edit", p) 
+                        term.setCursorBlink(false) 
+                        term.redirect(old) 
+                        drawUI() 
+                    end
                 end
             elseif activeTab == "HOME" and y > 1 and y < h then
                 local home = getHomeDir()
@@ -303,8 +327,18 @@ local function osEngine()
                     showContext(x, y, sel)
                 elseif sel then 
                     local p = fs.combine(home, sel)
-                    if fs.isDir(p) then activeTab = "FILE" currentPath = p drawUI()
-                    else local old = term.redirect(mainWin) term.setCursorBlink(true) shell.run("edit", p) term.setCursorBlink(false) term.redirect(old) drawUI() end
+                    if fs.isDir(p) then 
+                        activeTab = "FILE" 
+                        currentPath = normalizePath(p)
+                        drawUI()
+                    else 
+                        local old = term.redirect(mainWin) 
+                        term.setCursorBlink(true) 
+                        shell.run("edit", p) 
+                        term.setCursorBlink(false) 
+                        term.redirect(old) 
+                        drawUI() 
+                    end
                 end
             elseif activeTab == "CONF" then
                 if y == 5 then settings.themeIndex = (settings.themeIndex % #themes) + 1 saveSettings() drawUI()
