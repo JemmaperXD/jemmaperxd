@@ -130,27 +130,39 @@ end
 
 -- 4. CONTEXT MENU
 local function showContext(mx, my, file)
-    local opts = file and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}
-    local menuWin = window.create(term.current(), mx, my, 12, #opts)
-    menuWin.setBackgroundColor(colors.gray)
-    menuWin.setTextColor(colors.white)
-    menuWin.clear()
-    menuWin.setCursorBlink(false)
-    for i, o in ipairs(opts) do menuWin.setCursorPos(1, i) menuWin.write(" "..o) end
+    local opts = file and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"} [cite: 12]
+    local menuWin = window.create(term.current(), mx, my, 12, #opts) [cite: 12]
+    menuWin.setBackgroundColor(colors.gray) [cite: 12]
+    menuWin.setTextColor(colors.white) [cite: 12]
+    menuWin.clear() [cite: 12]
+    menuWin.setCursorBlink(false) [cite: 12]
+    for i, o in ipairs(opts) do menuWin.setCursorPos(1, i) menuWin.write(" "..o) end [cite: 12]
     
-    local _, btn, cx, cy = os.pullEvent("mouse_click")
-    if cx >= mx and cx < mx+12 and cy >= my and cy < my+#opts then
-        local choice = opts[cy-my+1]
-        local path = (activeTab == "HOME") and getHomeDir() or currentPath
-        mainWin.setCursorPos(1,1)
-        if choice == "New File" then mainWin.write("Name: ") local n = read() if n~="" then fs.open(fs.combine(path, n), "w").close() end
-        elseif choice == "New Folder" then mainWin.write("Dir: ") local n = read() if n~="" then fs.makeDir(fs.combine(path, n)) end
-        elseif choice == "Delete" then fs.delete(fs.combine(path, file))
-        elseif choice == "Rename" then mainWin.write("New: ") local n = read() if n~="" then fs.move(fs.combine(path, file), fs.combine(path, n)) end
-        elseif choice == "Copy" then clipboard.path = fs.combine(path, file)
-        elseif choice == "Paste" and clipboard.path then fs.copy(clipboard.path, fs.combine(path, fs.getName(clipboard.path))) end
+    local _, btn, cx, cy = os.pullEvent("mouse_click") [cite: 12]
+    if cx >= mx and cx < mx+12 and cy >= my and cy < my+#opts then [cite: 12, 13]
+        local choice = opts[cy-my+1] [cite: 13]
+        local path = (activeTab == "HOME") and getHomeDir() or currentPath [cite: 13]
+        mainWin.setCursorPos(1,1) [cite: 13]
+        
+        -- ПРИМЕНЕНИЕ ЗАЩИТЫ ОТ ПЕРЕЗАПИСИ 
+        if choice == "New File" then 
+            mainWin.write("Name: ") local n = read() 
+            if n~="" then fs.open(getUniquePath(path, n), "w").close() end
+        elseif choice == "New Folder" then 
+            mainWin.write("Dir: ") local n = read() 
+            if n~="" then fs.makeDir(getUniquePath(path, n)) end
+        elseif choice == "Delete" then 
+            fs.delete(fs.combine(path, file)) [cite: 14]
+        elseif choice == "Rename" then 
+            mainWin.write("New: ") local n = read() 
+            if n~="" then fs.move(fs.combine(path, file), getUniquePath(path, n)) end
+        elseif choice == "Copy" then 
+            clipboard.path = fs.combine(path, file) [cite: 14]
+        elseif choice == "Paste" and clipboard.path then 
+            fs.copy(clipboard.path, getUniquePath(path, fs.getName(clipboard.path))) [cite: 14]
+        end
     end
-    drawUI()
+    drawUI() [cite: 14]
 end
 
 -- 5. ENGINE
