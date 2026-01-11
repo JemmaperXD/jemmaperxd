@@ -1,4 +1,4 @@
--- ameOs v50.0 [THE COMPLETE EDITION: ANIM + FIXES]
+-- ameOs v51.0 [STABLE: ANIMATION & CLOCK FIX]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -14,12 +14,14 @@ local themes = {
 }
 local settings = { themeIndex = 1, user = "User", pass = "", isRegistered = false }
 
+-- Создание окон
 local topWin = window.create(term.current(), 1, 1, w, 1)
 local mainWin = window.create(term.current(), 1, 2, w, h - 2)
 local taskWin = window.create(term.current(), 1, h, w, 1)
 
--- 1. СИСТЕМА
+-- 1. СИСТЕМНЫЕ ФУНКЦИИ (Должны быть в начале)
 if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end
+
 local function getHomeDir() 
     local p = fs.combine("/.User", settings.user)
     if not fs.exists(p) then fs.makeDir(p) end
@@ -41,10 +43,10 @@ local function loadSettings()
     end
 end
 
--- 2. АНИМАЦИЯ ЗАГРУЗКИ (FUSION)
+-- 2. АНИМАЦИЯ FUSION (Точно как в v32.5)
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
-    local duration = 3 -- Оптимизировал время до 3 сек
+    local duration = 5
     local start = os.clock()
     local angle = 0
     while os.clock() - start < duration do
@@ -52,7 +54,7 @@ local function bootAnim()
         term.setBackgroundColor(colors.black)
         term.clear()
         local fusion = 1.0
-        if elapsed > (duration - 1) then fusion = math.max(0, 1 - (elapsed - (duration - 1))) end
+        if elapsed > (duration - 2) then fusion = math.max(0, 1 - (elapsed - (duration - 2)) / 2) end
         term.setTextColor(colors.cyan)
         local rX, rY = 2.5 * fusion, 1.5 * fusion
         for i = 1, 3 do
@@ -68,7 +70,7 @@ local function bootAnim()
     end
 end
 
--- 3. ГРАФИКА
+-- 3. ГРАФИКА И ИНТЕРФЕЙС
 local function drawTopBar()
     local theme = themes[settings.themeIndex]
     local old = term.redirect(topWin)
@@ -144,29 +146,22 @@ local function drawUI()
     end
 end
 
--- 4. ОБРАБОТЧИКИ
+-- 4. ВНЕШНИЕ ПРОГРАММЫ
 local function handleContext(choice, file)
     local path = (activeTab == "HOME") and getHomeDir() or currentPath
     contextMenu = nil
     drawUI()
     term.setCursorPos(1, h) term.setBackgroundColor(colors.black) term.clearLine()
-    term.write("Enter Name: ")
+    term.write("Name: ")
     term.setCursorBlink(true)
     local n = read()
     term.setCursorBlink(false)
-    if choice == "New File" and n~="" then 
-        fs.open(fs.combine(path, n), "w").close()
-    elseif choice == "New Folder" and n~="" then 
-        fs.makeDir(fs.combine(path, n))
-    elseif choice == "Delete" then 
-        fs.delete(fs.combine(path, file))
-    elseif choice == "Rename" and n~="" then 
-        fs.move(fs.combine(path, file), fs.combine(path, n))
-    elseif choice == "Copy" then 
-        clipboard.path = fs.combine(path, file)
-    elseif choice == "Paste" and clipboard.path then 
-        fs.copy(clipboard.path, fs.combine(path, fs.getName(clipboard.path))) 
-    end
+    if choice == "New File" and n~="" then fs.open(fs.combine(path, n), "w").close()
+    elseif choice == "New Folder" and n~="" then fs.makeDir(fs.combine(path, n))
+    elseif choice == "Delete" then fs.delete(fs.combine(path, file))
+    elseif choice == "Rename" and n~="" then fs.move(fs.combine(path, file), fs.combine(path, n))
+    elseif choice == "Copy" then clipboard.path = fs.combine(path, file)
+    elseif choice == "Paste" and clipboard.path then fs.copy(clipboard.path, fs.combine(path, fs.getName(clipboard.path))) end
     drawUI()
 end
 
@@ -179,7 +174,7 @@ local function runExternal(cmd, arg)
     drawUI()
 end
 
--- 5. ДВИЖОК
+-- 5. ОСНОВНОЙ ДВИЖОК
 local function osEngine()
     drawUI()
     globalTimer = os.startTimer(1)
@@ -260,9 +255,11 @@ local function osEngine()
     end
 end
 
--- ЗАПУСК
+-- ПОСЛЕДОВАТЕЛЬНЫЙ ЗАПУСК
 loadSettings()
-bootAnim()
+bootAnim() -- Теперь функция точно существует в памяти перед вызовом
+
+-- Авторизация
 if not settings.isRegistered then
     term.clear()
     term.setCursorPos(w/2-6, h/2-2) term.write("REGISTRATION")
@@ -277,4 +274,5 @@ else
         if read("*") == settings.pass then break end
     end
 end
+
 osEngine()
