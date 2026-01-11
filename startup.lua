@@ -158,7 +158,7 @@ local function drawUI()
     end
 end
 
--- 4. CONTEXT MENU
+-- 4. CONTEXT MENU (ИСПРАВЛЕННАЯ ВЕРСИЯ)
 local function showContext(mx, my, file)
     local opts = file and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}
     local menuWin = window.create(term.current(), mx, my, 12, #opts)
@@ -168,42 +168,72 @@ local function showContext(mx, my, file)
     menuWin.setCursorBlink(false)
     for i, o in ipairs(opts) do menuWin.setCursorPos(1, i) menuWin.write(" "..o) end
     
-    local _, btn, cx, cy = os.pullEvent("mouse_click")
-    if cx >= mx and cx < mx+12 and cy >= my and cy < my+#opts then
-        local choice = opts[cy-my+1]
-        local path = (activeTab == "HOME") and getHomeDir() or currentPath
+    local contextTimer = os.startTimer(1)
+    local contextRunning = true
+    
+    while contextRunning do
+        local ev, p1, p2, p3 = os.pullEvent()
         
-        if choice == "New File" then 
-            mainWin.setCursorPos(1,1)
-            mainWin.write("Name: ") 
-            local n = read() 
-            if n~="" then 
-                local f = fs.open(getUniquePath(path, n), "w")
-                if f then f.close() end
+        if ev == "timer" and (p1 == globalTimer or p1 == contextTimer) then
+            if p1 == globalTimer then
+                drawTopBar()
+                globalTimer = os.startTimer(1)
             end
-        elseif choice == "New Folder" then 
-            mainWin.setCursorPos(1,1)
-            mainWin.write("Dir: ") 
-            local n = read() 
-            if n~="" then fs.makeDir(getUniquePath(path, n)) end
-        elseif choice == "Delete" then 
-            fs.delete(fs.combine(path, file))
-        elseif choice == "Rename" then 
-            mainWin.setCursorPos(1,1)
-            mainWin.write("New: ") 
-            local n = read() 
-            if n~="" then 
-                local newPath = getUniquePath(path, n)
-                fs.move(fs.combine(path, file), newPath)
+            if p1 == contextTimer then
+                -- Обновляем верхнюю панель даже в контекстном меню
+                drawTopBar()
+                contextTimer = os.startTimer(1)
             end
-        elseif choice == "Copy" then 
-            clipboard.path = fs.combine(path, file)
-        elseif choice == "Paste" and clipboard.path then 
-            local newName = fs.getName(clipboard.path)
-            local destPath = getUniquePath(path, newName)
-            fs.copy(clipboard.path, destPath)
+        
+        elseif ev == "mouse_click" then
+            local btn, cx, cy = p1, p2, p3
+            if cx >= mx and cx < mx+12 and cy >= my and cy < my+#opts then
+                local choice = opts[cy-my+1]
+                local path = (activeTab == "HOME") and getHomeDir() or currentPath
+                
+                if choice == "New File" then 
+                    mainWin.setCursorPos(1,1)
+                    mainWin.write("Name: ") 
+                    local n = read() 
+                    if n~="" then 
+                        local f = fs.open(getUniquePath(path, n), "w")
+                        if f then f.close() end
+                    end
+                elseif choice == "New Folder" then 
+                    mainWin.setCursorPos(1,1)
+                    mainWin.write("Dir: ") 
+                    local n = read() 
+                    if n~="" then fs.makeDir(getUniquePath(path, n)) end
+                elseif choice == "Delete" then 
+                    fs.delete(fs.combine(path, file))
+                elseif choice == "Rename" then 
+                    mainWin.setCursorPos(1,1)
+                    mainWin.write("New: ") 
+                    local n = read() 
+                    if n~="" then 
+                        local newPath = getUniquePath(path, n)
+                        fs.move(fs.combine(path, file), newPath)
+                    end
+                elseif choice == "Copy" then 
+                    clipboard.path = fs.combine(path, file)
+                elseif choice == "Paste" and clipboard.path then 
+                    local newName = fs.getName(clipboard.path)
+                    local destPath = getUniquePath(path, newName)
+                    fs.copy(clipboard.path, destPath)
+                end
+                contextRunning = false
+            else
+                -- Клик вне меню - закрываем меню
+                contextRunning = false
+            end
         end
     end
+    
+    -- Отменяем локальный таймер контекстного меню
+    if contextTimer then
+        os.cancelTimer(contextTimer)
+    end
+    
     drawUI()
 end
 
@@ -254,7 +284,8 @@ local function osEngine()
                 local fList = fs.list(currentPath)
                 if currentPath ~= "/" then table.insert(fList, 1, "..") end
                 local sel = fList[y-2]
-                if btn == 2 then showContext(x, y, sel)
+                if btn == 2 then 
+                    showContext(x, y, sel)
                 elseif sel then
                     local p = fs.combine(currentPath, sel)
                     if fs.isDir(p) then currentPath = p drawUI()
@@ -268,7 +299,8 @@ local function osEngine()
                     local col, row = ((i-1)%4)*12+3, math.floor((i-1)/4)*4+2
                     if x >= col and x <= col+6 and y >= row and y <= row+1 then sel = n break end
                 end
-                if btn == 2 then showContext(x, y, sel)
+                if btn == 2 then 
+                    showContext(x, y, sel)
                 elseif sel then 
                     local p = fs.combine(home, sel)
                     if fs.isDir(p) then activeTab = "FILE" currentPath = p drawUI()
