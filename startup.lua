@@ -1,4 +1,4 @@
--- ameOs v68.0 [CURSOR, PATH, CLOCK & FS FIX]
+-- ameOs v69.0 [STRICT CURSOR CONTROL & STABLE CLOCK]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -18,7 +18,7 @@ local topWin = window.create(term.current(), 1, 1, w, 1)
 local mainWin = window.create(term.current(), 1, 2, w, h - 2)
 local taskWin = window.create(term.current(), 1, h, w, 1)
 
--- 1. СИСТЕМА И ЗАГРУЗКА [cite: 2, 3]
+-- 1. СИСТЕМА
 if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end
 local function getHomeDir() 
     local p = fs.combine("/.User", settings.user)
@@ -41,55 +41,31 @@ local function loadSettings()
     end
 end
 
-local function bootAnim() -- [cite: 3, 4, 5]
-    local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
-    local duration = 3
-    local start = os.clock()
-    local angle = 0
-    while os.clock() - start < duration do
-        term.setBackgroundColor(colors.black)
-        term.clear()
-        local elapsed = os.clock() - start
-        local fusion = 1.0
-        if elapsed > (duration - 1) then fusion = math.max(0, 1 - (elapsed - (duration - 1))) end
-        term.setTextColor(colors.cyan)
-        local rX, rY = 2.5 * fusion, 1.5 * fusion
-        for i = 1, 3 do
-            local a = angle + (i * 2.1)
-            term.setCursorPos(cx + math.floor(math.cos(a)*rX+0.5), cy + math.floor(math.sin(a)*rY+0.5))
-            term.write("o")
-        end
-        term.setCursorPos(cx - 2, h - 1)
-        term.setTextColor(colors.white)
-        term.write("ameOS")
-        angle = angle + 0.4
-        sleep(0.05)
-    end
-end
-
--- 2. ОТРИСОВКА [cite: 6, 7, 8, 9, 10, 11, 12]
+-- 2. ОТРИСОВКА (КУРСОР ВЫКЛЮЧЕН ПО УМОЛЧАНИЮ)
 local function drawTopBar()
     local theme = themes[settings.themeIndex]
-    local old = term.redirect(topWin)
     topWin.setBackgroundColor(theme.accent)
     topWin.setTextColor(theme.text)
     topWin.clear()
     
+    -- ПУТЬ
     topWin.setCursorPos(2, 1)
-    local pathDisplay = "ameOs | " .. activeTab
-    if activeTab == "FILE" then pathDisplay = pathDisplay .. ": " .. currentPath end
-    topWin.write(pathDisplay:sub(1, w - 10))
+    local pDisplay = "ameOs | " .. activeTab
+    if activeTab == "FILE" then pDisplay = pDisplay .. ": " .. currentPath end
+    topWin.write(pDisplay:sub(1, w - 12))
     
+    -- ЧАСЫ (ЖЕСТКАЯ ПОЗИЦИЯ)
     local timeStr = textutils.formatTime(os.time(), true)
     topWin.setCursorPos(w - #timeStr, 1)
     topWin.write(timeStr)
-    
-    term.redirect(old)
 end
 
 local function drawUI()
     local theme = themes[settings.themeIndex]
+    
+    -- Глобально выключаем курсор перед отрисовкой
     term.setCursorBlink(false)
+    mainWin.setCursorBlink(false)
     
     taskWin.setBackgroundColor(colors.black)
     taskWin.clear()
@@ -143,13 +119,12 @@ local function drawUI()
             term.setCursorPos(contextMenu.x, contextMenu.y + i - 1)
             term.setBackgroundColor(colors.gray)
             term.setTextColor(colors.white)
-            local txt = " "..opt
-            term.write(txt..string.rep(" ", mw - #txt))
+            term.write(" "..opt .. string.rep(" ", mw - #opt - 1))
         end
     end
 end
 
--- 3. ДВИЖОК [cite: 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29]
+-- 3. ДВИЖОК
 local function osEngine()
     drawUI()
     while running do
@@ -174,9 +149,9 @@ local function osEngine()
                         drawUI()
                         term.setCursorPos(1, h) term.setBackgroundColor(colors.black) term.setTextColor(colors.white)
                         term.clearLine() term.write("Name: ")
-                        term.setCursorBlink(true) -- МОРГАЕТ ТУТ
-                        local n = read() 
-                        term.setCursorBlink(false)
+                        term.setCursorBlink(true) -- ВКЛЮЧАЕМ ТОЛЬКО ТУТ
+                        local n = read()
+                        term.setCursorBlink(false) -- СРАЗУ ВЫКЛЮЧАЕМ
                         if n and n ~= "" then
                             local target = fs.combine(path, n)
                             if not fs.exists(target) then
@@ -203,18 +178,8 @@ local function osEngine()
                     drawUI()
                     local old = term.redirect(mainWin)
                     term.setBackgroundColor(colors.black) term.clear() term.setCursorPos(1,1)
-                    term.setCursorBlink(true) -- МОРГАЕТ В SHELL
-                    parallel.waitForAny(
-                        function() shell.run("shell") end,
-                        function()
-                            while true do
-                                local e, id, tx, ty = os.pullEvent()
-                                if e == "timer" and id == globalTimer then drawTopBar() globalTimer = os.startTimer(1)
-                                elseif e == "mouse_click" and ty == h then os.queueEvent("mouse_click", 1, tx, ty) return end
-                            end
-                        end
-                    )
-                    term.setCursorBlink(false) term.redirect(old)
+                    shell.run("shell") -- Shell сам управляет своим курсором
+                    term.redirect(old)
                     activeTab = "HOME"
                 end
                 drawUI()
@@ -228,7 +193,7 @@ local function osEngine()
                 elseif sel then
                     local p = fs.combine(currentPath, sel)
                     if fs.isDir(p) then currentPath = p drawUI() else 
-                        local old = term.redirect(mainWin) term.setCursorBlink(true) shell.run("edit", p) term.setCursorBlink(false) term.redirect(old) drawUI()
+                        local old = term.redirect(mainWin) shell.run("edit", p) term.redirect(old) drawUI()
                     end
                 end
             elseif activeTab == "HOME" and y > 1 and y < h then
@@ -245,7 +210,7 @@ local function osEngine()
                 elseif sel then 
                     local p = fs.combine(home, sel)
                     if fs.isDir(p) then activeTab = "FILE" currentPath = p drawUI() else
-                        local old = term.redirect(mainWin) term.setCursorBlink(true) shell.run("edit", p) term.setCursorBlink(false) term.redirect(old) drawUI()
+                        local old = term.redirect(mainWin) shell.run("edit", p) term.redirect(old) drawUI()
                     end
                 end
             elseif activeTab == "CONF" then
@@ -262,35 +227,35 @@ local function osEngine()
     end
 end
 
--- 4. ВХОД [cite: 30, 31]
+-- 4. СТАРТ
 loadSettings()
-bootAnim()
 term.setBackgroundColor(colors.black)
 term.clear()
 
-local function centeredAuth(title)
+local function authUI(title)
+    term.setBackgroundColor(colors.black)
     term.clear()
     term.setTextColor(colors.cyan)
-    term.setCursorPos(math.floor(w/2 - #title/2), h/2 - 1)
+    term.setCursorPos(math.floor(w/2 - #title/2), math.floor(h/2 - 1))
     print(title)
     term.setTextColor(colors.white)
 end
 
 if not settings.isRegistered then
-    centeredAuth("REGISTRATION")
+    authUI("REGISTRATION")
     term.setCursorBlink(true)
-    term.setCursorPos(math.floor(w/2 - 8), h/2 + 1) write("User: ") settings.user = read()
-    term.setCursorPos(math.floor(w/2 - 8), h/2 + 2) write("Pass: ") settings.pass = read("*")
+    term.setCursorPos(math.floor(w/2 - 8), math.floor(h/2 + 1)) write("User: ") settings.user = read()
+    term.setCursorPos(math.floor(w/2 - 8), math.floor(h/2 + 2)) write("Pass: ") settings.pass = read("*")
     settings.isRegistered = true saveSettings()
     term.setCursorBlink(false)
 else
     local auth = false
     while not auth do
-        centeredAuth("LOGIN: " .. settings.user)
+        authUI("LOGIN: " .. settings.user)
         term.setCursorBlink(true)
-        term.setCursorPos(math.floor(w/2 - 8), h/2 + 1) write("Pass: ")
+        term.setCursorPos(math.floor(w/2 - 8), math.floor(h/2 + 1)) write("Pass: ")
         if read("*") == settings.pass then auth = true else
-            term.setCursorPos(math.floor(w/2 - 2), h/2 + 3) term.setTextColor(colors.red) print("FAIL") sleep(0.5)
+            term.setCursorPos(math.floor(w/2 - 2), math.floor(h/2 + 3)) term.setTextColor(colors.red) print("FAIL") sleep(0.5)
         end
     end
 end
