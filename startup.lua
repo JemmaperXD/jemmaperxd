@@ -359,12 +359,57 @@ loadSettings()
 term.setBackgroundColor(colors.black)
 term.clear()
 
--- ФУНКЦИЯ БЕЗОПАСНОГО ВВОДА ПАРОЛЯ С ЗАЩИТОЙ ОТ ЗАВЕРШЕНИЯ
+-- АБСОЛЮТНАЯ ЗАЩИТА ОТ ЗАВЕРШЕНИЯ - ГЛОБАЛЬНАЯ ЗАМЕНА os.pullEvent
+local originalPullEvent = os.pullEvent
+local originalPullEventRaw = os.pullEventRaw
+
+-- Глобальный обработчик, который фильтрует terminate
+local function protectedPullEvent(filter)
+    while true do
+        local eventData = {originalPullEvent()}
+        local eventName = eventData[1]
+        
+        -- Если это событие terminate - полностью игнорируем его
+        if eventName == "terminate" then
+            -- АБСОЛЮТНО НИЧЕГО НЕ ДЕЛАЕМ - просто продолжаем ждать событий
+            -- Можно показать сообщение, но не обязательно
+        else
+            -- Если нет фильтра или событие соответствует фильтру
+            if not filter or eventName == filter then
+                return unpack(eventData)
+            end
+        end
+    end
+end
+
+-- То же самое для pullEventRaw
+local function protectedPullEventRaw(filter)
+    while true do
+        local eventData = {originalPullEventRaw()}
+        local eventName = eventData[1]
+        
+        -- Если это событие terminate - полностью игнорируем его
+        if eventName == "terminate" then
+            -- АБСОЛЮТНО НИЧЕГО НЕ ДЕЛАЕМ
+        else
+            if not filter or eventName == filter then
+                return unpack(eventData)
+            end
+        end
+    end
+end
+
+-- ЗАМЕНЯЕМ ГЛОБАЛЬНЫЕ ФУНКЦИИ - теперь НИКТО не сможет завершить процесс
+os.pullEvent = protectedPullEvent
+os.pullEventRaw = protectedPullEventRaw
+
+-- Простая функция ввода пароля с использованием ЗАЩИЩЕННОГО os.pullEvent
 local function securePasswordInput()
     local input = ""
     local cursorX, cursorY = term.getCursorPos()
     
     while true do
+        -- Используем нашу защищенную версию os.pullEvent
         local event, key = os.pullEvent()
         
         if event == "char" then
@@ -382,24 +427,12 @@ local function securePasswordInput()
             elseif key == 28 then -- Enter
                 return input
             end
-        -- ВАЖНО: Игнорируем событие terminate, чтобы нельзя было выйти
-        elseif event == "terminate" then
-            -- Показываем сообщение, что нельзя выйти
-            term.setCursorBlink(false)
-            term.setCursorPos(1, h)
-            term.setTextColor(colors.red)
-            term.write("Cannot exit during login! Enter password to continue.")
-            sleep(1.5)
-            term.setCursorPos(1, h)
-            term.write("                                              ")
-            term.setTextColor(colors.white)
-            term.setCursorPos(cursorX + #input, cursorY)
-            term.setCursorBlink(true)
         end
+        -- Событие terminate НИКОГДА не придет, т.к. мы его фильтруем глобально
     end
 end
 
--- ФУНКЦИЯ БЕЗОПАСНОГО ВВОДА ЛОГИНА (тоже с защитой)
+-- Простая функция ввода логина
 local function secureUserInput()
     local input = ""
     local cursorX, cursorY = term.getCursorPos()
@@ -422,34 +455,20 @@ local function secureUserInput()
             elseif key == 28 then -- Enter
                 return input
             end
-        elseif event == "terminate" then
-            -- Игнорируем завершение
-            term.setCursorBlink(false)
-            term.setCursorPos(1, h)
-            term.setTextColor(colors.red)
-            term.write("Cannot exit during login! Enter username to continue.")
-            sleep(1.5)
-            term.setCursorPos(1, h)
-            term.write("                                              ")
-            term.setTextColor(colors.white)
-            term.setCursorPos(cursorX + #input, cursorY)
-            term.setCursorBlink(true)
         end
     end
 end
 
--- ЗАЩИЩЕННЫЙ ЭКРАН ВХОДА (НЕЛЬЗЯ ВЫЙТИ ЗАВЕРШЕНИЕМ ПРОЦЕССА)
+-- ЗАЩИЩЕННЫЙ ЭКРАН ВХОДА - ВЫЙТИ НЕВОЗМОЖНО
 if not settings.isRegistered then
     -- ЭКРАН РЕГИСТРАЦИИ
     term.setCursorBlink(true)
     term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
     term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") 
     
-    -- Используем защищенный ввод для логина
     settings.user = secureUserInput()
     
     term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") 
-    -- Используем защищенный ввод для пароля
     settings.pass = securePasswordInput()
     
     settings.isRegistered = true 
@@ -457,27 +476,33 @@ if not settings.isRegistered then
     term.setCursorBlink(false)
 else
     -- ЭКРАН ВХОДА
+    local loginAttempts = 0
+    
     while true do
         term.setCursorBlink(true)
         term.clear()
         term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: "..settings.user)
         term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
         
-        -- Используем защищенный ввод пароля
         local password = securePasswordInput()
         
         if password == settings.pass then 
             break 
         else
             -- Неправильный пароль
-            term.setCursorPos(w/2-5, h/2+3)
+            loginAttempts = loginAttempts + 1
+            term.setCursorPos(w/2-8, h/2+3)
             term.setTextColor(colors.red)
-            term.write("Wrong password!")
-            sleep(1.5)
+            term.write("Wrong password! Try: " .. loginAttempts)
+            sleep(2)
         end
     end
     term.setCursorBlink(false)
 end
+
+-- Восстанавливаем оригинальные функции после входа
+os.pullEvent = originalPullEvent
+os.pullEventRaw = originalPullEventRaw
 
 -- ЗАПУСКАЕМ ОСНОВНУЮ СИСТЕМУ
 osEngine()
