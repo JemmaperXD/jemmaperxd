@@ -1,4 +1,4 @@
--- ameOs v69.0 [STRICT CURSOR CONTROL & STABLE CLOCK]
+-- ameOs v70.0 [STABLE: FIXED CLOCK, PATH, CURSOR & FS]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -6,7 +6,6 @@ local activeTab = "HOME"
 local currentPath = "/"
 local clipboard = { path = nil }
 local globalTimer = nil
-local contextMenu = nil 
 
 local themes = {
     { name = "Night",     bg = colors.black, accent = colors.gray, text = colors.lightGray },
@@ -23,7 +22,7 @@ if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end
 local function getHomeDir() 
     local p = fs.combine("/.User", settings.user)
     if not fs.exists(p) then fs.makeDir(p) end
-    return p
+    return p 
 end
 
 local function saveSettings()
@@ -41,32 +40,52 @@ local function loadSettings()
     end
 end
 
--- 2. ОТРИСОВКА (КУРСОР ВЫКЛЮЧЕН ПО УМОЛЧАНИЮ)
+-- 2. АНИМАЦИЯ ЗАГРУЗКИ
+local function bootAnim()
+    local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
+    local angle = 0
+    for i = 1, 40 do
+        term.setBackgroundColor(colors.black)
+        term.clear()
+        term.setTextColor(colors.cyan)
+        for j = 1, 3 do
+            local a = angle + (j * 2.1)
+            term.setCursorPos(cx + math.floor(math.cos(a)*2.5+0.5), cy + math.floor(math.sin(a)*1.5+0.5))
+            term.write("o")
+        end
+        term.setCursorPos(cx - 2, h - 1)
+        term.setTextColor(colors.white)
+        term.write("ameOS")
+        angle = angle + 0.4
+        sleep(0.05)
+    end
+end
+
+-- 3. ОТРИСОВКА
 local function drawTopBar()
     local theme = themes[settings.themeIndex]
+    local old = term.redirect(topWin)
     topWin.setBackgroundColor(theme.accent)
     topWin.setTextColor(theme.text)
     topWin.clear()
     
     -- ПУТЬ
     topWin.setCursorPos(2, 1)
-    local pDisplay = "ameOs | " .. activeTab
-    if activeTab == "FILE" then pDisplay = pDisplay .. ": " .. currentPath end
-    topWin.write(pDisplay:sub(1, w - 12))
+    local title = "ameOs | " .. activeTab
+    if activeTab == "FILE" then title = title .. ": " .. currentPath end
+    topWin.write(title:sub(1, w - 10))
     
-    -- ЧАСЫ (ЖЕСТКАЯ ПОЗИЦИЯ)
+    -- ЧАСЫ
     local timeStr = textutils.formatTime(os.time(), true)
     topWin.setCursorPos(w - #timeStr, 1)
     topWin.write(timeStr)
+    term.redirect(old)
 end
 
 local function drawUI()
     local theme = themes[settings.themeIndex]
-    
-    -- Глобально выключаем курсор перед отрисовкой
-    term.setCursorBlink(false)
-    mainWin.setCursorBlink(false)
-    
+    term.setCursorBlink(false) -- ЖЕСТКО ВЫКЛЮЧАЕМ КУРСОР
+
     taskWin.setBackgroundColor(colors.black)
     taskWin.clear()
     local tabs = { {n="HOME", x=1}, {n="FILE", x=8}, {n="SHLL", x=15}, {n="CONF", x=22} }
@@ -112,19 +131,9 @@ local function drawUI()
         mainWin.setCursorPos(2, 8) mainWin.setTextColor(theme.text)
         mainWin.write("[ SHUTDOWN ]")
     end
-
-    if contextMenu then
-        local mw = 12
-        for i, opt in ipairs(contextMenu.options) do
-            term.setCursorPos(contextMenu.x, contextMenu.y + i - 1)
-            term.setBackgroundColor(colors.gray)
-            term.setTextColor(colors.white)
-            term.write(" "..opt .. string.rep(" ", mw - #opt - 1))
-        end
-    end
 end
 
--- 3. ДВИЖОК
+-- 4. ДВИЖОК
 local function osEngine()
     drawUI()
     while running do
@@ -136,39 +145,7 @@ local function osEngine()
             globalTimer = os.startTimer(1)
         elseif ev == "mouse_click" then
             local btn, x, y = p1, p2, p3
-            
-            if contextMenu then
-                local mw, mh = 12, #contextMenu.options
-                if x >= contextMenu.x and x < contextMenu.x + mw and y >= contextMenu.y and y < contextMenu.y + mh then
-                    local choice = contextMenu.options[y - contextMenu.y + 1]
-                    local file = contextMenu.file
-                    local path = (activeTab == "HOME") and getHomeDir() or currentPath
-                    contextMenu = nil
-                    
-                    if choice == "New File" or choice == "New Folder" or choice == "Rename" then
-                        drawUI()
-                        term.setCursorPos(1, h) term.setBackgroundColor(colors.black) term.setTextColor(colors.white)
-                        term.clearLine() term.write("Name: ")
-                        term.setCursorBlink(true) -- ВКЛЮЧАЕМ ТОЛЬКО ТУТ
-                        local n = read()
-                        term.setCursorBlink(false) -- СРАЗУ ВЫКЛЮЧАЕМ
-                        if n and n ~= "" then
-                            local target = fs.combine(path, n)
-                            if not fs.exists(target) then
-                                if choice == "New File" then fs.open(target, "w").close()
-                                elseif choice == "New Folder" then fs.makeDir(target)
-                                elseif choice == "Rename" then fs.move(fs.combine(path, file), target) end
-                            end
-                        end
-                    elseif choice == "Delete" then fs.delete(fs.combine(path, file))
-                    elseif choice == "Copy" then clipboard.path = fs.combine(path, file)
-                    elseif choice == "Paste" and clipboard.path then 
-                        local target = fs.combine(path, fs.getName(clipboard.path))
-                        if not fs.exists(target) then fs.copy(clipboard.path, target) end
-                    end
-                    drawUI()
-                else contextMenu = nil drawUI() end
-            elseif y == h then
+            if y == h then
                 if x >= 1 and x <= 6 then activeTab = "HOME"
                 elseif x >= 8 and x <= 13 then activeTab = "FILE"
                 elseif x >= 15 and x <= 20 then activeTab = "SHLL"
@@ -178,7 +155,7 @@ local function osEngine()
                     drawUI()
                     local old = term.redirect(mainWin)
                     term.setBackgroundColor(colors.black) term.clear() term.setCursorPos(1,1)
-                    shell.run("shell") -- Shell сам управляет своим курсором
+                    shell.run("shell")
                     term.redirect(old)
                     activeTab = "HOME"
                 end
@@ -187,10 +164,7 @@ local function osEngine()
                 local files = fs.list(currentPath)
                 if currentPath ~= "/" then table.insert(files, 1, "..") end
                 local sel = files[y - 1]
-                if btn == 2 then
-                    contextMenu = { x=x, y=y, options = (sel and sel ~= "..") and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}, file = sel }
-                    drawUI()
-                elseif sel then
+                if sel then
                     local p = fs.combine(currentPath, sel)
                     if fs.isDir(p) then currentPath = p drawUI() else 
                         local old = term.redirect(mainWin) shell.run("edit", p) term.redirect(old) drawUI()
@@ -204,10 +178,7 @@ local function osEngine()
                     local col, row = ((i-1)%4)*12+3, math.floor((i-1)/4)*4+2
                     if x >= col and x <= col+6 and y >= row and y <= row+1 then sel = n break end
                 end
-                if btn == 2 then
-                    contextMenu = { x=x, y=y, options = sel and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}, file = sel }
-                    drawUI()
-                elseif sel then 
+                if sel then 
                     local p = fs.combine(home, sel)
                     if fs.isDir(p) then activeTab = "FILE" currentPath = p drawUI() else
                         local old = term.redirect(mainWin) shell.run("edit", p) term.redirect(old) drawUI()
@@ -219,7 +190,7 @@ local function osEngine()
                     term.setBackgroundColor(colors.black) term.clear()
                     term.setCursorPos(w/2-6, h/2) print("Updating...")
                     fs.delete("startup.lua")
-                    shell.run("wget https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/stable/startup.lua startup.lua")
+                    shell.run("wget https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua startup.lua")
                     os.reboot()
                 elseif y == 9 then running = false end
             end
@@ -227,39 +198,31 @@ local function osEngine()
     end
 end
 
--- 4. СТАРТ
+-- 5. ТОЧКА ВХОДА
 loadSettings()
+bootAnim()
 term.setBackgroundColor(colors.black)
 term.clear()
 
-local function authUI(title)
-    term.setBackgroundColor(colors.black)
-    term.clear()
-    term.setTextColor(colors.cyan)
-    term.setCursorPos(math.floor(w/2 - #title/2), math.floor(h/2 - 1))
-    print(title)
-    term.setTextColor(colors.white)
-end
-
 if not settings.isRegistered then
-    authUI("REGISTRATION")
+    term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("REGISTRATION")
     term.setCursorBlink(true)
-    term.setCursorPos(math.floor(w/2 - 8), math.floor(h/2 + 1)) write("User: ") settings.user = read()
-    term.setCursorPos(math.floor(w/2 - 8), math.floor(h/2 + 2)) write("Pass: ") settings.pass = read("*")
+    term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("User: ") settings.user = read()
+    term.setCursorPos(w/2-8, h/2+2) term.write("Pass: ") settings.pass = read("*")
     settings.isRegistered = true saveSettings()
     term.setCursorBlink(false)
 else
     local auth = false
     while not auth do
-        authUI("LOGIN: " .. settings.user)
+        term.clear()
+        term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: " .. settings.user)
         term.setCursorBlink(true)
-        term.setCursorPos(math.floor(w/2 - 8), math.floor(h/2 + 1)) write("Pass: ")
+        term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
         if read("*") == settings.pass then auth = true else
-            term.setCursorPos(math.floor(w/2 - 2), math.floor(h/2 + 3)) term.setTextColor(colors.red) print("FAIL") sleep(0.5)
+            term.setCursorPos(w/2-3, h/2+3) term.setTextColor(colors.red) term.write("FAIL") sleep(0.5)
         end
     end
+    term.setCursorBlink(false)
 end
 
 osEngine()
-term.setBackgroundColor(colors.black)
-term.clear()
