@@ -1,10 +1,11 @@
--- ameOs v43.0 [FINAL REPAIR: CLOCK & FULL CONTEXT]
+-- ameOs v44.0 [FINAL STABLE: CLOCK & CURSOR FIX]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
 local activeTab = "HOME"
 local currentPath = "/"
 local clipboard = { path = nil }
+local globalTimer = nil
 
 local themes = {
     { name = "Night",     bg = colors.black, accent = colors.gray, text = colors.lightGray },
@@ -62,13 +63,14 @@ local function bootAnim()
     end
 end
 
--- 3. ГРАФИКА
+-- 3. ГРАФИКА И ЧАСЫ
 local function drawTopBar()
     local theme = themes[settings.themeIndex]
     local old = term.redirect(topWin)
     topWin.setBackgroundColor(theme.accent)
     topWin.setTextColor(theme.text)
     topWin.clear()
+    topWin.setCursorBlink(false) -- УБИРАЕМ КУРСОР
     topWin.setCursorPos(2, 1) topWin.write("ameOs | " .. activeTab)
     topWin.setCursorPos(w - 6, 1)
     topWin.write(textutils.formatTime(os.time(), true))
@@ -125,7 +127,7 @@ local function drawUI()
     end
 end
 
--- 4. ПОЛНОЕ КОНТЕКСТНОЕ МЕНЮ
+-- 4. МЕНЮ ПКМ
 local function showContext(mx, my, file)
     local opts = file and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}
     local menuWin = window.create(term.current(), mx, my, 12, #opts)
@@ -152,18 +154,25 @@ end
 -- 5. ДВИЖОК
 local function osEngine()
     drawUI()
-    local clockT = os.startTimer(1)
+    globalTimer = os.startTimer(1)
+    
     while running do
         local ev, p1, p2, p3 = os.pullEvent()
-        if ev == "timer" and p1 == clockT then
-            drawTopBar() clockT = os.startTimer(1)
+        
+        -- НЕЗАВИСИМЫЙ ТАЙМЕР ЧАСОВ
+        if ev == "timer" and p1 == globalTimer then
+            drawTopBar()
+            globalTimer = os.startTimer(1)
+        
         elseif ev == "mouse_click" then
             local btn, x, y = p1, p2, p3
             if y == h then
+                local oldTab = activeTab
                 if x >= 1 and x <= 6 then activeTab = "HOME"
                 elseif x >= 8 and x <= 13 then activeTab = "FILE"
                 elseif x >= 15 and x <= 20 then activeTab = "SHLL"
                 elseif x >= 22 and x <= 27 then activeTab = "CONF" end
+                
                 if activeTab == "SHLL" then
                     drawUI()
                     local old = term.redirect(mainWin)
@@ -171,17 +180,18 @@ local function osEngine()
                     term.setCursorBlink(true)
                     parallel.waitForAny(
                         function() shell.run("shell") end,
-                        function() -- Фикс часов и таскбара
-                            local st = os.startTimer(1)
+                        function()
+                            local lt = os.startTimer(1)
                             while true do
                                 local e, id, tx, ty = os.pullEvent()
-                                if e == "timer" and id == st then drawTopBar() st = os.startTimer(1)
+                                if e == "timer" and id == lt then drawTopBar() lt = os.startTimer(1)
                                 elseif e == "mouse_click" and ty == h then os.queueEvent("mouse_click", 1, tx, ty) return end
                             end
                         end
                     )
                     term.setCursorBlink(false) term.redirect(old)
-                    activeTab = "HOME"
+                    activeTab = oldTab
+                    globalTimer = os.startTimer(0.1) -- ПЕРЕЗАПУСК ГЛОБАЛЬНОГО ТАЙМЕРА
                 end
                 drawUI()
             elseif activeTab == "FILE" and y > 1 and y < h then
@@ -212,7 +222,8 @@ local function osEngine()
                 if y == 5 then settings.themeIndex = (settings.themeIndex % #themes) + 1 saveSettings() drawUI()
                 elseif y == 7 then 
                     mainWin.clear() mainWin.setCursorPos(1,1) print("Updating...")
-                    fs.delete("startup.lua") shell.run("wget https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua startup.lua")
+                    if fs.exists("startup.lua") then fs.delete("startup.lua") end
+                    shell.run("wget https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua startup.lua")
                     os.reboot()
                 elseif y == 9 then running = false end
             end
