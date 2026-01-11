@@ -1,4 +1,4 @@
--- ameOs v44.0 [FINAL STABLE: CLOCK & CURSOR FIX]
+-- ameOs v46.0 [TOTAL CLOCK & NAVIGATION FIX]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -17,7 +17,7 @@ local topWin = window.create(term.current(), 1, 1, w, 1)
 local mainWin = window.create(term.current(), 1, 2, w, h - 2)
 local taskWin = window.create(term.current(), 1, h, w, 1)
 
--- 1. СИСТЕМА
+-- 1. SYSTEM UTILS
 if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end
 local function getHomeDir() return fs.combine("/.User", "." .. settings.user) end
 
@@ -36,7 +36,7 @@ local function loadSettings()
     end
 end
 
--- 2. АНИМАЦИЯ FUSION (v32.5)
+-- 2. BOOT ANIMATION
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
     local duration = 5
@@ -63,14 +63,14 @@ local function bootAnim()
     end
 end
 
--- 3. ГРАФИКА И ЧАСЫ
+-- 3. RENDERING
 local function drawTopBar()
     local theme = themes[settings.themeIndex]
     local old = term.redirect(topWin)
+    topWin.setCursorBlink(false)
     topWin.setBackgroundColor(theme.accent)
     topWin.setTextColor(theme.text)
     topWin.clear()
-    topWin.setCursorBlink(false) -- УБИРАЕМ КУРСОР
     topWin.setCursorPos(2, 1) topWin.write("ameOs | " .. activeTab)
     topWin.setCursorPos(w - 6, 1)
     topWin.write(textutils.formatTime(os.time(), true))
@@ -81,6 +81,7 @@ local function drawUI()
     local theme = themes[settings.themeIndex]
     taskWin.setBackgroundColor(colors.black)
     taskWin.clear()
+    taskWin.setCursorBlink(false)
     local tabs = { {n="HOME", x=1}, {n="FILE", x=8}, {n="SHLL", x=15}, {n="CONF", x=22} }
     for _, t in ipairs(tabs) do
         taskWin.setCursorPos(t.x, 1)
@@ -127,13 +128,14 @@ local function drawUI()
     end
 end
 
--- 4. МЕНЮ ПКМ
+-- 4. CONTEXT MENU
 local function showContext(mx, my, file)
     local opts = file and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}
     local menuWin = window.create(term.current(), mx, my, 12, #opts)
     menuWin.setBackgroundColor(colors.gray)
     menuWin.setTextColor(colors.white)
     menuWin.clear()
+    menuWin.setCursorBlink(false)
     for i, o in ipairs(opts) do menuWin.setCursorPos(1, i) menuWin.write(" "..o) end
     
     local _, btn, cx, cy = os.pullEvent("mouse_click")
@@ -151,7 +153,7 @@ local function showContext(mx, my, file)
     drawUI()
 end
 
--- 5. ДВИЖОК
+-- 5. ENGINE
 local function osEngine()
     drawUI()
     globalTimer = os.startTimer(1)
@@ -159,7 +161,6 @@ local function osEngine()
     while running do
         local ev, p1, p2, p3 = os.pullEvent()
         
-        -- НЕЗАВИСИМЫЙ ТАЙМЕР ЧАСОВ
         if ev == "timer" and p1 == globalTimer then
             drawTopBar()
             globalTimer = os.startTimer(1)
@@ -167,7 +168,6 @@ local function osEngine()
         elseif ev == "mouse_click" then
             local btn, x, y = p1, p2, p3
             if y == h then
-                local oldTab = activeTab
                 if x >= 1 and x <= 6 then activeTab = "HOME"
                 elseif x >= 8 and x <= 13 then activeTab = "FILE"
                 elseif x >= 15 and x <= 20 then activeTab = "SHLL"
@@ -190,9 +190,11 @@ local function osEngine()
                         end
                     )
                     term.setCursorBlink(false) term.redirect(old)
-                    activeTab = oldTab
-                    globalTimer = os.startTimer(0.1) -- ПЕРЕЗАПУСК ГЛОБАЛЬНОГО ТАЙМЕРА
+                    activeTab = "HOME"
                 end
+                -- КРИТИЧЕСКИЙ ФИКС: Перезапуск таймера после любой смены вкладки
+                os.cancelTimer(globalTimer)
+                globalTimer = os.startTimer(0.1)
                 drawUI()
             elseif activeTab == "FILE" and y > 1 and y < h then
                 local fList = fs.list(currentPath)
@@ -231,22 +233,26 @@ local function osEngine()
     end
 end
 
--- 6. LOGIN
+-- 6. ENTRY POINT
 bootAnim()
 loadSettings()
 term.setBackgroundColor(colors.black)
 term.clear()
 if not settings.isRegistered then
+    term.setCursorBlink(true)
     term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
     term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") settings.user = read()
     term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") settings.pass = read("*")
     settings.isRegistered = true saveSettings()
+    term.setCursorBlink(false)
 else
     while true do
+        term.setCursorBlink(true)
         term.clear()
         term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: "..settings.user)
         term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
         if read("*") == settings.pass then break end
     end
 end
+term.setCursorBlink(false)
 osEngine()
