@@ -122,7 +122,8 @@ local function drawUI()
         for i, n in ipairs(files) do
             local col, row = ((i-1)%4)*12+3, math.floor((i-1)/4)*4+1
             mainWin.setCursorPos(col, row)
-            mainWin.setTextColor(fs.isDir(fs.combine(home, n)) and colors.cyan or colors.yellow)
+            -- Изменено: файлы синие, папки желтые/оранжевые
+            mainWin.setTextColor(fs.isDir(fs.combine(home, n)) and colors.yellow or colors.blue)
             mainWin.write("[#]")
             mainWin.setCursorPos(col-1, row+1)
             mainWin.setTextColor(colors.white)
