@@ -8,8 +8,6 @@ local clipboard = { path = nil }
 local globalTimer = nil
 
 local themes = {
-    { name = "Obsidian",  bg = colors.black, accent = colors.gray, text = colors.lightGray },
-    { name = "Deep Oak",  bg = colors.black, accent = colors.brown, text = colors.gray },
     { name = "Dark Moss", bg = colors.black, accent = colors.green, text = colors.gray },
     { name = "Abyss",     bg = colors.black, accent = colors.cyan, text = colors.gray },
     { name = "Charcoal",  bg = colors.black, accent = colors.gray, text = colors.lightGray },
@@ -36,7 +34,13 @@ local function loadSettings()
         local f = fs.open(SETTINGS_PATH, "r")
         local data = f.readAll() f.close()
         local decoded = textutils.unserialize(data or "")
-        if type(decoded) == "table" then settings = decoded end
+        if type(decoded) == "table" then 
+            settings = decoded 
+            -- Проверка корректности themeIndex после загрузки
+            if settings.themeIndex > #themes then
+                settings.themeIndex = 1
+            end
+        end
     end
 end
 
@@ -275,7 +279,7 @@ local function osEngine()
                 elseif y == 7 then 
                     mainWin.clear() mainWin.setCursorPos(1,1) print("Updating...")
                     if fs.exists("startup.lua") then fs.delete("startup.lua") end
-                    shell.run("wget https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/stable/startup.lua startup.lua")
+                    shell.run("wget https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua startup.lua")
                     os.reboot()
                 elseif y == 9 then running = false end
             end
