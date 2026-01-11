@@ -341,13 +341,85 @@ local function osEngine()
                     end
                 end
             elseif activeTab == "CONF" then
-                if y == 5 then settings.themeIndex = (settings.themeIndex % #themes) + 1 saveSettings() drawUI()
+                if y == 5 then 
+                    settings.themeIndex = (settings.themeIndex % #themes) + 1 
+                    saveSettings() 
+                    drawUI()
                 elseif y == 7 then 
-                    mainWin.clear() mainWin.setCursorPos(1,1) print("Updating...")
-                    if fs.exists("startup.lua") then fs.delete("startup.lua") end
-                    shell.run("wget https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua startup.lua")
-                    os.reboot()
-                elseif y == 9 then running = false end
+                    -- ОБНОВЛЕНИЕ СИСТЕМЫ - ИСПРАВЛЕННАЯ ВЕРСИЯ
+                    mainWin.clear() 
+                    mainWin.setCursorPos(1,1) 
+                    mainWin.setTextColor(colors.yellow)
+                    mainWin.write("Updating system...")
+                    
+                    -- Создаем временный файл для загрузки
+                    local tempFile = "startup_temp.lua"
+                    local finalFile = "startup.lua"
+                    local url = "https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua"
+                    
+                    -- Пытаемся скачать обновление несколько раз
+                    local downloadSuccess = false
+                    for attempt = 1, 3 do
+                        mainWin.setCursorPos(1, 2)
+                        mainWin.write("Attempt " .. attempt .. "/3...")
+                        
+                        -- Удаляем старый временный файл если существует
+                        if fs.exists(tempFile) then
+                            fs.delete(tempFile)
+                        end
+                        
+                        -- Пытаемся скачать
+                        if shell.run("wget", url, tempFile) then
+                            if fs.exists(tempFile) then
+                                -- Проверяем что файл не пустой
+                                local file = fs.open(tempFile, "r")
+                                if file then
+                                    local content = file.readAll()
+                                    file.close()
+                                    if content and #content > 100 then  -- Минимальный размер файла
+                                        downloadSuccess = true
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                        
+                        if attempt < 3 then
+                            sleep(2)  -- Ждем перед повторной попыткой
+                        end
+                    end
+                    
+                    if downloadSuccess then
+                        -- Удаляем старый startup.lua если существует
+                        if fs.exists(finalFile) then
+                            fs.delete(finalFile)
+                        end
+                        
+                        -- Переименовываем временный файл в startup.lua
+                        fs.move(tempFile, finalFile)
+                        
+                        mainWin.setCursorPos(1, 3)
+                        mainWin.setTextColor(colors.lime)
+                        mainWin.write("Update successful! Rebooting...")
+                        sleep(2)
+                        
+                        -- Перезагружаем систему
+                        os.reboot()
+                    else
+                        -- Удаляем временный файл если он существует
+                        if fs.exists(tempFile) then
+                            fs.delete(tempFile)
+                        end
+                        
+                        mainWin.setCursorPos(1, 3)
+                        mainWin.setTextColor(colors.red)
+                        mainWin.write("Update failed! Check connection.")
+                        sleep(3)
+                        drawUI()
+                    end
+                elseif y == 9 then 
+                    running = false 
+                end
             end
         end
     end
