@@ -1,7 +1,3 @@
-[file name]: изображение.png
-[file content begin]
-\[0 \textcircled{1} 0\]
-[file content end]
 
 -- ameOs v46.0 [TOTAL CLOCK & NAVIGATION FIX]
 local w, h = term.getSize()
