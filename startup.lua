@@ -1,4 +1,4 @@
--- ameOs v51.0 [STABLE: ANIMATION & CLOCK FIX]
+-- ameOs v53.0 [FIXED: SHELL CLOCK RECOVERY & RECT MENU]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -14,12 +14,11 @@ local themes = {
 }
 local settings = { themeIndex = 1, user = "User", pass = "", isRegistered = false }
 
--- Создание окон
 local topWin = window.create(term.current(), 1, 1, w, 1)
 local mainWin = window.create(term.current(), 1, 2, w, h - 2)
 local taskWin = window.create(term.current(), 1, h, w, 1)
 
--- 1. СИСТЕМНЫЕ ФУНКЦИИ (Должны быть в начале)
+-- 1. СИСТЕМА
 if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end
 
 local function getHomeDir() 
@@ -43,7 +42,7 @@ local function loadSettings()
     end
 end
 
--- 2. АНИМАЦИЯ FUSION (Точно как в v32.5)
+-- 2. АНИМАЦИЯ FUSION
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
     local duration = 5
@@ -70,7 +69,7 @@ local function bootAnim()
     end
 end
 
--- 3. ГРАФИКА И ИНТЕРФЕЙС
+-- 3. ОТРИСОВКА
 local function drawTopBar()
     local theme = themes[settings.themeIndex]
     local old = term.redirect(topWin)
@@ -86,7 +85,6 @@ end
 
 local function drawUI()
     local theme = themes[settings.themeIndex]
-    
     taskWin.setBackgroundColor(colors.black)
     taskWin.clear()
     local tabs = { {n="HOME", x=1}, {n="FILE", x=8}, {n="SHLL", x=15}, {n="CONF", x=22} }
@@ -96,9 +94,7 @@ local function drawUI()
         taskWin.setTextColor(activeTab == t.n and theme.text or colors.white)
         taskWin.write(" "..t.n.." ")
     end
-    
     drawTopBar()
-    
     mainWin.setBackgroundColor(theme.bg)
     mainWin.setTextColor(theme.text)
     mainWin.clear()
@@ -137,32 +133,21 @@ local function drawUI()
     end
 
     if contextMenu then
+        local mw = 12
         for i, opt in ipairs(contextMenu.options) do
             term.setCursorPos(contextMenu.x, contextMenu.y + i - 1)
             term.setBackgroundColor(colors.gray)
             term.setTextColor(colors.white)
-            term.write(" " .. opt .. " ")
+            local text = " " .. opt
+            term.write(text .. string.rep(" ", mw - #text))
         end
     end
 end
 
--- 4. ВНЕШНИЕ ПРОГРАММЫ
-local function handleContext(choice, file)
-    local path = (activeTab == "HOME") and getHomeDir() or currentPath
-    contextMenu = nil
-    drawUI()
-    term.setCursorPos(1, h) term.setBackgroundColor(colors.black) term.clearLine()
-    term.write("Name: ")
-    term.setCursorBlink(true)
-    local n = read()
-    term.setCursorBlink(false)
-    if choice == "New File" and n~="" then fs.open(fs.combine(path, n), "w").close()
-    elseif choice == "New Folder" and n~="" then fs.makeDir(fs.combine(path, n))
-    elseif choice == "Delete" then fs.delete(fs.combine(path, file))
-    elseif choice == "Rename" and n~="" then fs.move(fs.combine(path, file), fs.combine(path, n))
-    elseif choice == "Copy" then clipboard.path = fs.combine(path, file)
-    elseif choice == "Paste" and clipboard.path then fs.copy(clipboard.path, fs.combine(path, fs.getName(clipboard.path))) end
-    drawUI()
+-- 4. ВЫЗОВ ПРОГРАММ
+local function forceClockReset()
+    if globalTimer then os.cancelTimer(globalTimer) end
+    globalTimer = os.startTimer(0.1) -- Почти мгновенное обновление
 end
 
 local function runExternal(cmd, arg)
@@ -171,10 +156,11 @@ local function runExternal(cmd, arg)
     shell.run(cmd, arg or "")
     term.setCursorBlink(false)
     term.redirect(old)
+    forceClockReset()
     drawUI()
 end
 
--- 5. ОСНОВНОЙ ДВИЖОК
+-- 5. ДВИЖОК
 local function osEngine()
     drawUI()
     globalTimer = os.startTimer(1)
@@ -191,7 +177,24 @@ local function osEngine()
             
             if contextMenu then
                 if x >= contextMenu.x and x <= contextMenu.x + 12 and y >= contextMenu.y and y < contextMenu.y + #contextMenu.options then
-                    handleContext(contextMenu.options[y - contextMenu.y + 1], contextMenu.file)
+                    local choice = contextMenu.options[y - contextMenu.y + 1]
+                    local file = contextMenu.file
+                    contextMenu = nil
+                    drawUI()
+                    -- Логика контекстного меню
+                    term.setCursorPos(1, h) term.setBackgroundColor(colors.black) term.clearLine()
+                    term.write("Name: ")
+                    term.setCursorBlink(true)
+                    local n = read()
+                    term.setCursorBlink(false)
+                    local path = (activeTab == "HOME") and getHomeDir() or currentPath
+                    if choice == "New File" and n~="" then fs.open(fs.combine(path, n), "w").close()
+                    elseif choice == "New Folder" and n~="" then fs.makeDir(fs.combine(path, n))
+                    elseif choice == "Delete" then fs.delete(fs.combine(path, file))
+                    elseif choice == "Rename" and n~="" then fs.move(fs.combine(path, file), fs.combine(path, n))
+                    elseif choice == "Copy" then clipboard.path = fs.combine(path, file)
+                    elseif choice == "Paste" and clipboard.path then fs.copy(clipboard.path, fs.combine(path, fs.getName(clipboard.path))) end
+                    drawUI()
                 else
                     contextMenu = nil
                     drawUI()
@@ -211,11 +214,15 @@ local function osEngine()
                             while true do
                                 local e, id, tx, ty = os.pullEvent()
                                 if e == "timer" and id == lt then drawTopBar() lt = os.startTimer(1)
-                                elseif e == "mouse_click" and ty == h then os.queueEvent("mouse_click", 1, tx, ty) return end
+                                elseif e == "mouse_click" and ty == h then 
+                                    os.queueEvent("mouse_click", 1, tx, ty) 
+                                    return 
+                                end
                             end
                         end
                     )
                     activeTab = "HOME"
+                    forceClockReset()
                 end
                 drawUI()
             elseif activeTab == "FILE" and y > 1 and y < h then
@@ -255,20 +262,19 @@ local function osEngine()
     end
 end
 
--- ПОСЛЕДОВАТЕЛЬНЫЙ ЗАПУСК
+-- СТАРТ
 loadSettings()
-bootAnim() -- Теперь функция точно существует в памяти перед вызовом
+bootAnim()
 
--- Авторизация
 if not settings.isRegistered then
-    term.clear()
+    term.setBackgroundColor(colors.black) term.clear()
     term.setCursorPos(w/2-6, h/2-2) term.write("REGISTRATION")
     term.setCursorPos(w/2-8, h/2) term.write("User: ") settings.user = read()
     term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") settings.pass = read("*")
     settings.isRegistered = true saveSettings()
 else
     while true do
-        term.clear()
+        term.setBackgroundColor(colors.black) term.clear()
         term.setCursorPos(w/2-6, h/2-1) term.write("LOGIN: "..settings.user)
         term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ")
         if read("*") == settings.pass then break end
