@@ -1,54 +1,39 @@
--- ameOs v46.1 [PATH IN BAR & AUTO-RENAME FIX]
-local w, h = term.getSize() [cite: 1]
-local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg" [cite: 1]
-local running = true [cite: 1]
-local activeTab = "HOME" [cite: 1]
-local currentPath = "/" [cite: 1]
-local clipboard = { path = nil } [cite: 1]
-local globalTimer = nil [cite: 1]
+-- ameOs v46.0 [TOTAL CLOCK & NAVIGATION FIX]
+local w, h = term.getSize()
+local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
+local running = true
+local activeTab = "HOME"
+local currentPath = "/"
+local clipboard = { path = nil }
+local globalTimer = nil
 
 local themes = {
-    { name = "Night",     bg = colors.black, accent = colors.gray, text = colors.lightGray }, [cite: 1]
-    { name = "Hacker",    bg = colors.black, accent = colors.lime, text = colors.lime } [cite: 1]
+    { name = "Night",     bg = colors.black, accent = colors.gray, text = colors.lightGray },
+    { name = "Hacker",    bg = colors.black, accent = colors.lime, text = colors.lime }
 }
-local settings = { themeIndex = 1, user = "User", pass = "", isRegistered = false } [cite: 1]
+local settings = { themeIndex = 1, user = "User", pass = "", isRegistered = false }
 
-local topWin = window.create(term.current(), 1, 1, w, 1) [cite: 1, 2]
-local mainWin = window.create(term.current(), 1, 2, w, h - 2) [cite: 2]
-local taskWin = window.create(term.current(), 1, h, w, 1) [cite: 2]
+local topWin = window.create(term.current(), 1, 1, w, 1)
+local mainWin = window.create(term.current(), 1, 2, w, h - 2)
+local taskWin = window.create(term.current(), 1, h, w, 1)
 
 -- 1. SYSTEM UTILS
-if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end [cite: 2]
-local function getHomeDir() return fs.combine("/.User", "." .. settings.user) end [cite: 2]
+if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end
+local function getHomeDir() return fs.combine("/.User", "." .. settings.user) end
 
 local function saveSettings()
-    local f = fs.open(SETTINGS_PATH, "w") [cite: 2]
-    f.write(textutils.serialize(settings)) [cite: 2]
-    f.close() [cite: 2]
+    local f = fs.open(SETTINGS_PATH, "w")
+    f.write(textutils.serialize(settings))
+    f.close()
 end
 
 local function loadSettings()
-    if fs.exists(SETTINGS_PATH) then [cite: 2]
-        local f = fs.open(SETTINGS_PATH, "r") [cite: 2]
-        local data = f.readAll() f.close() [cite: 2]
-        local decoded = textutils.unserialize(data or "") [cite: 2]
-        if type(decoded) == "table" then settings = decoded end [cite: 3]
+    if fs.exists(SETTINGS_PATH) then
+        local f = fs.open(SETTINGS_PATH, "r")
+        local data = f.readAll() f.close()
+        local decoded = textutils.unserialize(data or "")
+        if type(decoded) == "table" then settings = decoded end
     end
-end
-
--- Функция для генерации уникального имени (защита от краша/перезаписи)
-local function getUniquePath(basePath, name)
-    local fullPath = fs.combine(basePath, name)
-    if not fs.exists(fullPath) then return fullPath end
-    
-    local namePart = name:match("(.+)%..+") or name
-    local extPart = name:match(".+(%.%w+)$") or ""
-    local counter = 1
-    
-    while fs.exists(fs.combine(basePath, namePart .. " (" .. counter .. ")" .. extPart)) do
-        counter = counter + 1
-    end
-    return fs.combine(basePath, namePart .. " (" .. counter .. ")" .. extPart)
 end
 
 -- 2. BOOT ANIMATION
