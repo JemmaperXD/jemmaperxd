@@ -159,7 +159,7 @@ local function showContext(mx, my, file)
         elseif choice == "Copy" then 
             clipboard.path = fs.combine(path, file) [cite: 14]
         elseif choice == "Paste" and clipboard.path then 
-            fs.copy(clipboard.path, getUniquePath(path, fs.getName(clipboard.path))) [cite: 14]
+            fs.copy(clipboard.path, getUniquePath(path, fs.getName(clipboard.path)))
         end
     end
     drawUI() [cite: 14]
