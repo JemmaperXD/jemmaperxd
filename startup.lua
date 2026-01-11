@@ -359,44 +359,57 @@ loadSettings()
 term.setBackgroundColor(colors.black)
 term.clear()
 
--- Простая функция безопасного ввода, которая точно работает
+-- ФУНКЦИЯ БЕЗОПАСНОГО ВВОДА ПАРОЛЯ (Enter и Backspace работают, нельзя выйти)
 local function securePasswordInput()
-    local input = ""
-    local cursorPos = term.getCursorPos()
+    local password = ""
+    term.setCursorBlink(true)
     
     while true do
-        local event, param1, param2 = os.pullEvent()
+        local event, key = os.pullEvent()
         
         if event == "char" then
-            input = input .. param1
-            term.write("*")
+            -- Добавляем символ к паролю
+            password = password .. key
+            term.write("*") -- Показываем звездочку
         elseif event == "key" then
-            -- Код 28 = Enter, 14 = Backspace
-            if param1 == 14 then -- Backspace
-                if #input > 0 then
-                    input = input:sub(1, -2)
+            if key == 14 then -- Backspace
+                if #password > 0 then
+                    -- Удаляем последний символ
+                    password = password:sub(1, -2)
                     local x, y = term.getCursorPos()
-                    term.setCursorPos(x-1, y)
+                    term.setCursorPos(x - 1, y)
                     term.write(" ")
-                    term.setCursorPos(x-1, y)
+                    term.setCursorPos(x - 1, y)
                 end
-            elseif param1 == 28 then -- Enter
-                return input
+            elseif key == 28 then -- Enter (Return)
+                term.setCursorBlink(false)
+                return password
             end
         elseif event == "terminate" then
-            -- Игнорируем завершение, посылая фиктивное событие
-            os.queueEvent("ignored_terminate")
+            -- Игнорируем Ctrl+T
+            -- Можем показать сообщение, но не выходим
+            term.setCursorBlink(false)
+            term.setCursorPos(1, h)
+            term.setTextColor(colors.red)
+            term.write("Cannot exit login! Press Ctrl+R to restart")
+            sleep(1.5)
+            term.setCursorPos(1, h)
+            term.write("                                   ")
+            term.setTextColor(colors.white)
+            term.setCursorPos(w/2-8 + #password + 1, h/2+1) -- Возвращаем курсор на место
+            term.setCursorBlink(true)
         end
     end
 end
 
--- Защищенный экран входа
+-- ЗАЩИЩЕННЫЙ ЭКРАН ВХОДА (нельзя выйти завершением процесса)
 if not settings.isRegistered then
-    -- Экран регистрации (можно использовать стандартный read)
+    -- ЭКРАН РЕГИСТРАЦИИ (первый запуск)
     term.setCursorBlink(true)
     term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
     term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") 
     
+    -- Для регистрации используем стандартный read (один раз)
     settings.user = read()
     
     term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") 
@@ -406,14 +419,14 @@ if not settings.isRegistered then
     saveSettings()
     term.setCursorBlink(false)
 else
-    -- Экран входа с защитой
+    -- ЭКРАН ВХОДА (с защитой от завершения)
     while true do
         term.setCursorBlink(true)
         term.clear()
         term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: "..settings.user)
         term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
         
-        -- Используем простую функцию ввода пароля
+        -- Используем защищенный ввод пароля
         local password = securePasswordInput()
         
         if password == settings.pass then 
@@ -429,5 +442,5 @@ else
     term.setCursorBlink(false)
 end
 
--- Запускаем основную систему
+-- ЗАПУСКАЕМ ОСНОВНУЮ СИСТЕМУ
 osEngine()
