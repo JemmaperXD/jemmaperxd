@@ -36,6 +36,27 @@ local function loadSettings()
     end
 end
 
+-- Функция для получения уникального имени файла
+local function getUniquePath(dir, name)
+    local path = fs.combine(dir, name)
+    if not fs.exists(path) then return path end
+    
+    local ext = ""
+    local base = name
+    local dotPos = name:find("%.[^%.]*$")
+    if dotPos then
+        base = name:sub(1, dotPos-1)
+        ext = name:sub(dotPos)
+    end
+    
+    local counter = 1
+    repeat
+        path = fs.combine(dir, base .. "(" .. counter .. ")" .. ext)
+        counter = counter + 1
+    until not fs.exists(path)
+    return path
+end
+
 -- 2. BOOT ANIMATION
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
@@ -130,39 +151,51 @@ end
 
 -- 4. CONTEXT MENU
 local function showContext(mx, my, file)
-    local opts = file and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"} [cite: 12]
-    local menuWin = window.create(term.current(), mx, my, 12, #opts) [cite: 12]
-    menuWin.setBackgroundColor(colors.gray) [cite: 12]
-    menuWin.setTextColor(colors.white) [cite: 12]
-    menuWin.clear() [cite: 12]
-    menuWin.setCursorBlink(false) [cite: 12]
-    for i, o in ipairs(opts) do menuWin.setCursorPos(1, i) menuWin.write(" "..o) end [cite: 12]
+    local opts = file and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}
+    local menuWin = window.create(term.current(), mx, my, 12, #opts)
+    menuWin.setBackgroundColor(colors.gray)
+    menuWin.setTextColor(colors.white)
+    menuWin.clear()
+    menuWin.setCursorBlink(false)
+    for i, o in ipairs(opts) do menuWin.setCursorPos(1, i) menuWin.write(" "..o) end
     
-    local _, btn, cx, cy = os.pullEvent("mouse_click") [cite: 12]
-    if cx >= mx and cx < mx+12 and cy >= my and cy < my+#opts then [cite: 12, 13]
-        local choice = opts[cy-my+1] [cite: 13]
-        local path = (activeTab == "HOME") and getHomeDir() or currentPath [cite: 13]
-        mainWin.setCursorPos(1,1) [cite: 13]
+    local _, btn, cx, cy = os.pullEvent("mouse_click")
+    if cx >= mx and cx < mx+12 and cy >= my and cy < my+#opts then
+        local choice = opts[cy-my+1]
+        local path = (activeTab == "HOME") and getHomeDir() or currentPath
         
-        -- ПРИМЕНЕНИЕ ЗАЩИТЫ ОТ ПЕРЕЗАПИСИ 
         if choice == "New File" then 
-            mainWin.write("Name: ") local n = read() 
-            if n~="" then fs.open(getUniquePath(path, n), "w").close() end
+            mainWin.setCursorPos(1,1)
+            mainWin.write("Name: ") 
+            local n = read() 
+            if n~="" then 
+                local f = fs.open(getUniquePath(path, n), "w")
+                if f then f.close() end
+            end
         elseif choice == "New Folder" then 
-            mainWin.write("Dir: ") local n = read() 
+            mainWin.setCursorPos(1,1)
+            mainWin.write("Dir: ") 
+            local n = read() 
             if n~="" then fs.makeDir(getUniquePath(path, n)) end
         elseif choice == "Delete" then 
-            fs.delete(fs.combine(path, file)) [cite: 14]
+            fs.delete(fs.combine(path, file))
         elseif choice == "Rename" then 
-            mainWin.write("New: ") local n = read() 
-            if n~="" then fs.move(fs.combine(path, file), getUniquePath(path, n)) end
+            mainWin.setCursorPos(1,1)
+            mainWin.write("New: ") 
+            local n = read() 
+            if n~="" then 
+                local newPath = getUniquePath(path, n)
+                fs.move(fs.combine(path, file), newPath)
+            end
         elseif choice == "Copy" then 
-            clipboard.path = fs.combine(path, file) [cite: 14]
+            clipboard.path = fs.combine(path, file)
         elseif choice == "Paste" and clipboard.path then 
-            fs.copy(clipboard.path, getUniquePath(path, fs.getName(clipboard.path))) [cite: 14]
+            local newName = fs.getName(clipboard.path)
+            local destPath = getUniquePath(path, newName)
+            fs.copy(clipboard.path, destPath)
         end
     end
-    drawUI() [cite: 14]
+    drawUI()
 end
 
 -- 5. ENGINE
