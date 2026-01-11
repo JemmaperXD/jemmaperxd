@@ -8,8 +8,13 @@ local clipboard = { path = nil }
 local globalTimer = nil
 
 local themes = {
-    { name = "Night",     bg = colors.black, accent = colors.gray, text = colors.lightGray },
-    { name = "Hacker",    bg = colors.black, accent = colors.lime, text = colors.lime }
+    { name = "Midnight",  bg = colors.black, accent = colors.blue, text = colors.gray },
+    { name = "Deep Oak",  bg = colors.black, accent = colors.brown, text = colors.gray },
+    { name = "Dark Moss", bg = colors.black, accent = colors.green, text = colors.gray },
+    { name = "Shadow",    bg = colors.black, accent = colors.purple, text = colors.lightGray },
+    { name = "Crimson",   bg = colors.black, accent = colors.red, text = colors.gray },
+    { name = "Abyss",     bg = colors.black, accent = colors.cyan, text = colors.gray },
+    { name = "Charcoal",  bg = colors.black, accent = colors.gray, text = colors.lightGray }
 }
 local settings = { themeIndex = 1, user = "User", pass = "", isRegistered = false }
 
