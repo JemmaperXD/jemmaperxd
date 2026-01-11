@@ -79,40 +79,6 @@ local function normalizePath(path)
     return path
 end
 
--- Функция безопасного чтения пароля (нельзя выйти)
-local function secureRead(maskChar)
-    local input = ""
-    local cursorPos = 1
-    
-    while true do
-        local event, key, x, y = os.pullEvent()
-        
-        if event == "char" then
-            input = input .. key
-            if maskChar then
-                term.write(maskChar)
-            else
-                term.write(key)
-            end
-        elseif event == "key" then
-            if key == 28 then -- Enter
-                return input
-            elseif key == 14 then -- Backspace
-                if #input > 0 then
-                    input = input:sub(1, -2)
-                    local cx, cy = term.getCursorPos()
-                    term.setCursorPos(cx - 1, cy)
-                    term.write(" ")
-                    term.setCursorPos(cx - 1, cy)
-                end
-            end
-        -- Игнорируем события завершения
-        elseif event == "terminate" then
-            -- Ничего не делаем, просто игнорируем
-        end
-    end
-end
-
 -- 2. BOOT ANIMATION
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
@@ -393,48 +359,68 @@ loadSettings()
 term.setBackgroundColor(colors.black)
 term.clear()
 
--- Функция для экрана входа (нельзя выйти завершением процесса)
-local function secureLoginScreen()
-    local loginRunning = true
+-- Защищенный экран входа (нельзя выйти завершением процесса)
+if not settings.isRegistered then
+    -- Экрана регистрации
+    term.setCursorBlink(true)
+    term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
+    term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") 
+    settings.user = read()
     
-    while loginRunning do
-        if not settings.isRegistered then
-            term.setCursorBlink(true)
-            term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
-            term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") 
-            settings.user = secureRead(nil)
+    term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") 
+    settings.pass = read("*")
+    
+    settings.isRegistered = true 
+    saveSettings()
+    term.setCursorBlink(false)
+else
+    -- Экрана входа с защитой от завершения
+    while true do
+        term.setCursorBlink(true)
+        term.clear()
+        term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: "..settings.user)
+        term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
+        
+        -- Используем os.pullEventRaw для защиты от завершения
+        local password = ""
+        local inputActive = true
+        
+        while inputActive do
+            local event, param = os.pullEventRaw()
             
-            term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") 
-            settings.pass = secureRead("*")
-            
-            settings.isRegistered = true 
-            saveSettings()
-            term.setCursorBlink(false)
-            loginRunning = false
-        else
-            while true do
-                term.setCursorBlink(true)
-                term.clear()
-                term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: "..settings.user)
-                term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
-                
-                -- Используем безопасное чтение пароля
-                local inputPass = secureRead("*")
-                if inputPass == settings.pass then 
-                    term.setCursorBlink(false)
-                    loginRunning = false
-                    break 
+            if event == "char" then
+                password = password .. param
+                term.write("*")
+            elseif event == "key" and param == 14 then -- Backspace
+                if #password > 0 then
+                    password = password:sub(1, -2)
+                    local x, y = term.getCursorPos()
+                    term.setCursorPos(x-1, y)
+                    term.write(" ")
+                    term.setCursorPos(x-1, y)
                 end
-                -- Неправильный пароль - просто продолжаем цикл
-                term.setCursorBlink(false)
-                sleep(0.5) -- Небольшая задержка перед повторной попыткой
+            elseif event == "key" and param == 28 then -- Enter
+                inputActive = false
+            -- Игнорируем событие terminate (Ctrl+T)
+            elseif event == "terminate" then
+                -- Ничего не делаем, просто игнорируем
             end
         end
+        
+        if password == settings.pass then 
+            break 
+        else
+            -- Неправильный пароль
+            term.setCursorPos(w/2-5, h/2+2)
+            term.setTextColor(colors.red)
+            term.write("Wrong password!")
+            sleep(1.5)
+            term.setCursorPos(w/2-5, h/2+2)
+            term.write("                ")
+        end
     end
+    term.setCursorBlink(false)
 end
 
--- Запускаем защищенный экран входа
-secureLoginScreen()
-
--- После успешного входа запускаем основную систему
+-- Запускаем основную систему
 osEngine()
