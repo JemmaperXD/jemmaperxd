@@ -1,4 +1,4 @@
--- ameOs v54.0 [FIXED: FILE CLICK SYNC & CLOCK RECOVERY]
+-- ameOs v56.0 [FIXED: FILE CLICK COORDINATES]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -18,9 +18,8 @@ local topWin = window.create(term.current(), 1, 1, w, 1)
 local mainWin = window.create(term.current(), 1, 2, w, h - 2)
 local taskWin = window.create(term.current(), 1, h, w, 1)
 
--- 1. SYSTEM
+-- 1. СИСТЕМА
 if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end
-
 local function getHomeDir() 
     local p = fs.combine("/.User", settings.user)
     if not fs.exists(p) then fs.makeDir(p) end
@@ -42,7 +41,7 @@ local function loadSettings()
     end
 end
 
--- 2. BOOT ANIMATION (v32.5 Style)
+-- 2. АНИМАЦИЯ FUSION (v32.5)
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
     local duration = 5
@@ -69,14 +68,13 @@ local function bootAnim()
     end
 end
 
--- 3. DRAWING
+-- 3. ОТРИСОВКА
 local function drawTopBar()
     local theme = themes[settings.themeIndex]
     local old = term.redirect(topWin)
     topWin.setBackgroundColor(theme.accent)
     topWin.setTextColor(theme.text)
     topWin.clear()
-    topWin.setCursorBlink(false)
     topWin.setCursorPos(2, 1) topWin.write("ameOs | " .. activeTab)
     topWin.setCursorPos(w - 6, 1)
     topWin.write(textutils.formatTime(os.time(), true))
@@ -119,7 +117,7 @@ local function drawUI()
         if currentPath ~= "/" then table.insert(files, 1, "..") end
         for i, n in ipairs(files) do
             if i > h-4 then break end
-            mainWin.setCursorPos(1, i+2) -- Список начинается со 2-й строки окна
+            mainWin.setCursorPos(1, i+1) -- Отрисовка файлов со СТРОКИ 2 (i+1 внутри mainWin)
             mainWin.setTextColor(fs.isDir(fs.combine(currentPath, n)) and colors.cyan or colors.white)
             mainWin.write("> "..n)
         end
@@ -144,34 +142,32 @@ local function drawUI()
     end
 end
 
--- 4. UTILS
-local function forceClockReset()
-    if globalTimer then os.cancelTimer(globalTimer) end
-    globalTimer = os.startTimer(0.2)
-end
-
+-- 4. ВНЕШНИЙ ЗАПУСК
 local function runExternal(cmd, arg)
     local old = term.redirect(mainWin)
     term.setCursorBlink(true)
     shell.run(cmd, arg or "")
     term.setCursorBlink(false)
     term.redirect(old)
-    forceClockReset()
-    drawUI()
+    os.queueEvent("timer_reset")
 end
 
--- 5. ENGINE
+-- 5. ДВИЖОК
 local function osEngine()
     drawUI()
-    globalTimer = os.startTimer(1)
-    
     while running do
+        if not globalTimer then globalTimer = os.startTimer(1) end
+        
         local ev, p1, p2, p3 = os.pullEvent()
         
         if ev == "timer" and p1 == globalTimer then
             drawTopBar()
             globalTimer = os.startTimer(1)
         
+        elseif ev == "timer_reset" then
+            globalTimer = nil
+            drawUI()
+
         elseif ev == "mouse_click" then
             local btn, x, y = p1, p2, p3
             
@@ -193,12 +189,12 @@ local function osEngine()
                     elseif choice == "Rename" and n~="" then fs.move(fs.combine(path, file), fs.combine(path, n))
                     elseif choice == "Copy" then clipboard.path = fs.combine(path, file)
                     elseif choice == "Paste" and clipboard.path then fs.copy(clipboard.path, fs.combine(path, fs.getName(clipboard.path))) end
-                    drawUI()
+                    os.queueEvent("timer_reset")
                 else
                     contextMenu = nil
                     drawUI()
                 end
-            elseif y == h then -- TASKBAR
+            elseif y == h then
                 if x >= 1 and x <= 6 then activeTab = "HOME"
                 elseif x >= 8 and x <= 13 then activeTab = "FILE"
                 elseif x >= 15 and x <= 20 then activeTab = "SHLL"
@@ -209,23 +205,20 @@ local function osEngine()
                     parallel.waitForAny(
                         function() runExternal("shell") end,
                         function()
-                            local lt = os.startTimer(1)
                             while true do
-                                local e, id, tx, ty = os.pullEvent()
-                                if e == "timer" and id == lt then drawTopBar() lt = os.startTimer(1)
-                                elseif e == "mouse_click" and ty == h then return end
+                                local e, _, tx, ty = os.pullEvent("mouse_click")
+                                if ty == h then return end
                             end
                         end
                     )
                     activeTab = "HOME"
-                    forceClockReset()
+                    os.queueEvent("timer_reset")
                 end
                 drawUI()
-            elseif activeTab == "FILE" and y > 1 and y < h then
+            elseif activeTab == "FILE" and y > 2 and y < h then
                 local files = fs.list(currentPath)
                 if currentPath ~= "/" then table.insert(files, 1, "..") end
-                -- ВАЖНО: список отрисован с y=3 (в координатах экрана), так как y=1 это топбар, y=2 это путь.
-                -- Поэтому индекс в таблице: y - 2
+                -- ОТКАТ: теперь y-2 четко попадает в файл
                 local sel = files[y-2]
                 if btn == 2 then
                     contextMenu = { x=x, y=y, options = sel and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}, file = sel }
@@ -260,7 +253,7 @@ local function osEngine()
     end
 end
 
--- START
+-- СТАРТ
 loadSettings()
 bootAnim()
 
