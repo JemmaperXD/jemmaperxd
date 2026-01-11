@@ -1,4 +1,4 @@
--- ameOs v46.0 [TOTAL CLOCK & NAVIGATION FIX]
+-- ameOs v47.0 [EDIT CLOCK & APP RECOVERY FIX]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -17,7 +17,7 @@ local topWin = window.create(term.current(), 1, 1, w, 1)
 local mainWin = window.create(term.current(), 1, 2, w, h - 2)
 local taskWin = window.create(term.current(), 1, h, w, 1)
 
--- 1. SYSTEM UTILS
+-- 1. SYSTEM
 if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end
 local function getHomeDir() return fs.combine("/.User", "." .. settings.user) end
 
@@ -36,7 +36,7 @@ local function loadSettings()
     end
 end
 
--- 2. BOOT ANIMATION
+-- 2. BOOT
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
     local duration = 5
@@ -63,7 +63,7 @@ local function bootAnim()
     end
 end
 
--- 3. RENDERING
+-- 3. DRAWING
 local function drawTopBar()
     local theme = themes[settings.themeIndex]
     local old = term.redirect(topWin)
@@ -75,6 +75,11 @@ local function drawTopBar()
     topWin.setCursorPos(w - 6, 1)
     topWin.write(textutils.formatTime(os.time(), true))
     term.redirect(old)
+end
+
+local function resetTimer()
+    if globalTimer then os.cancelTimer(globalTimer) end
+    globalTimer = os.startTimer(1)
 end
 
 local function drawUI()
@@ -128,7 +133,18 @@ local function drawUI()
     end
 end
 
--- 4. CONTEXT MENU
+-- 4. APPS WRAPPER
+local function runExternal(cmd, arg)
+    local old = term.redirect(mainWin)
+    term.setCursorBlink(true)
+    if arg then shell.run(cmd, arg) else shell.run(cmd) end
+    term.setCursorBlink(false)
+    term.redirect(old)
+    resetTimer() -- ПРИНУДИТЕЛЬНЫЙ СБРОС ТАЙМЕРА ПОСЛЕ ВЫХОДА
+    drawUI()
+end
+
+-- 5. CONTEXT MENU
 local function showContext(mx, my, file)
     local opts = file and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}
     local menuWin = window.create(term.current(), mx, my, 12, #opts)
@@ -153,10 +169,10 @@ local function showContext(mx, my, file)
     drawUI()
 end
 
--- 5. ENGINE
+-- 6. ENGINE
 local function osEngine()
     drawUI()
-    globalTimer = os.startTimer(1)
+    resetTimer()
     
     while running do
         local ev, p1, p2, p3 = os.pullEvent()
@@ -175,11 +191,8 @@ local function osEngine()
                 
                 if activeTab == "SHLL" then
                     drawUI()
-                    local old = term.redirect(mainWin)
-                    term.setBackgroundColor(colors.black) term.clear() term.setCursorPos(1,1)
-                    term.setCursorBlink(true)
                     parallel.waitForAny(
-                        function() shell.run("shell") end,
+                        function() runExternal("shell") end,
                         function()
                             local lt = os.startTimer(1)
                             while true do
@@ -189,12 +202,9 @@ local function osEngine()
                             end
                         end
                     )
-                    term.setCursorBlink(false) term.redirect(old)
                     activeTab = "HOME"
                 end
-                -- КРИТИЧЕСКИЙ ФИКС: Перезапуск таймера после любой смены вкладки
-                os.cancelTimer(globalTimer)
-                globalTimer = os.startTimer(0.1)
+                resetTimer()
                 drawUI()
             elseif activeTab == "FILE" and y > 1 and y < h then
                 local fList = fs.list(currentPath)
@@ -204,7 +214,7 @@ local function osEngine()
                 elseif sel then
                     local p = fs.combine(currentPath, sel)
                     if fs.isDir(p) then currentPath = p drawUI()
-                    else local old = term.redirect(mainWin) term.setCursorBlink(true) shell.run("edit", p) term.setCursorBlink(false) term.redirect(old) drawUI() end
+                    else runExternal("edit", p) end
                 end
             elseif activeTab == "HOME" and y > 1 and y < h then
                 local home = getHomeDir()
@@ -218,7 +228,7 @@ local function osEngine()
                 elseif sel then 
                     local p = fs.combine(home, sel)
                     if fs.isDir(p) then activeTab = "FILE" currentPath = p drawUI()
-                    else local old = term.redirect(mainWin) term.setCursorBlink(true) shell.run("edit", p) term.setCursorBlink(false) term.redirect(old) drawUI() end
+                    else runExternal("edit", p) end
                 end
             elseif activeTab == "CONF" then
                 if y == 5 then settings.themeIndex = (settings.themeIndex % #themes) + 1 saveSettings() drawUI()
@@ -233,26 +243,22 @@ local function osEngine()
     end
 end
 
--- 6. ENTRY POINT
+-- 7. LOGIN
 bootAnim()
 loadSettings()
 term.setBackgroundColor(colors.black)
 term.clear()
 if not settings.isRegistered then
-    term.setCursorBlink(true)
     term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
     term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") settings.user = read()
     term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") settings.pass = read("*")
     settings.isRegistered = true saveSettings()
-    term.setCursorBlink(false)
 else
     while true do
-        term.setCursorBlink(true)
         term.clear()
         term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: "..settings.user)
         term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
         if read("*") == settings.pass then break end
     end
 end
-term.setCursorBlink(false)
 osEngine()
