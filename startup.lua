@@ -1,4 +1,4 @@
--- ameOS v46.0 [LineageOS Style]
+-- ameOs v46.0 [TOTAL CLOCK & NAVIGATION FIX]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -9,356 +9,504 @@ local globalTimer = nil
 
 local themes = {
     { name = "Dark Moss", bg = colors.black, accent = colors.green, text = colors.gray },
-    { name = "Abyss", bg = colors.black, accent = colors.cyan, text = colors.gray },
-    { name = "Lineage", bg = colors.black, accent = colors.blue, text = colors.white }
+    { name = "Abyss",     bg = colors.black, accent = colors.cyan, text = colors.gray },
+    { name = "Charcoal",  bg = colors.black, accent = colors.gray, text = colors.lightGray },
+    { name = "Slate",     bg = colors.black, accent = colors.lightGray, text = colors.gray }
 }
+local settings = { themeIndex = 1, user = "User", pass = "", isRegistered = false }
 
-local settings = { 
-    themeIndex = 1, 
-    user = "User", 
-    pass = "", 
-    isRegistered = false,
-    soundEnabled = true,
-    showClock = true
-}
-
--- Создаем окна
 local topWin = window.create(term.current(), 1, 1, w, 1)
 local mainWin = window.create(term.current(), 1, 2, w, h - 2)
 local taskWin = window.create(term.current(), 1, h, w, 1)
 
--- Функции системы
+-- 1. SYSTEM UTILS
 if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end
-
-local function getHomeDir() 
-    return "/home/" .. settings.user 
-end
+local function getHomeDir() return fs.combine("/.User", "." .. settings.user) end
 
 local function saveSettings()
     local f = fs.open(SETTINGS_PATH, "w")
-    if f then
-        f.write(textutils.serialize(settings))
-        f.close()
-    end
+    f.write(textutils.serialize(settings))
+    f.close()
 end
 
 local function loadSettings()
     if fs.exists(SETTINGS_PATH) then
         local f = fs.open(SETTINGS_PATH, "r")
-        if f then
-            local data = f.readAll()
-            f.close()
-            local decoded = textutils.unserialize(data)
-            if type(decoded) == "table" then
-                for k, v in pairs(decoded) do
-                    settings[k] = v
-                end
+        local data = f.readAll() f.close()
+        local decoded = textutils.unserialize(data or "")
+        if type(decoded) == "table" then 
+            settings = decoded 
+            if settings.themeIndex > #themes then
+                settings.themeIndex = 1
             end
         end
     end
 end
 
--- НОВАЯ АНИМАЦИЯ ЗАГРУЗКИ LINEAGEOS
-local function lineageBootAnim()
-    term.setBackgroundColor(colors.black)
-    term.clear()
-    term.setCursorBlink(false)
+local function getUniquePath(dir, name)
+    local path = fs.combine(dir, name)
+    if not fs.exists(path) then return path end
     
-    local centerX, centerY = math.floor(w/2), math.floor(h/2)
-    local radius = 4
-    local duration = 3.5
-    local startTime = os.clock()
-    
-    -- Анимация круга
-    while os.clock() - startTime < duration do
-        local elapsed = os.clock() - startTime
-        local progress = elapsed / duration
-        
-        term.setBackgroundColor(colors.black)
-        term.clear()
-        
-        -- Рисуем внешний круг
-        term.setTextColor(colors.blue)
-        for angle = 0, 360, 30 do
-            local rad = math.rad(angle)
-            local x = centerX + math.floor(math.cos(rad) * radius + 0.5)
-            local y = centerY + math.floor(math.sin(rad) * radius + 0.5)
-            term.setCursorPos(x, y)
-            term.write("o")
-        end
-        
-        -- Рисуем заполняющийся прогресс
-        term.setTextColor(colors.cyan)
-        local fillAngle = progress * 360
-        for angle = 0, fillAngle, 30 do
-            local rad = math.rad(angle)
-            local x = centerX + math.floor(math.cos(rad) * (radius - 1) + 0.5)
-            local y = centerY + math.floor(math.sin(rad) * (radius - 1) + 0.5)
-            term.setCursorPos(x, y)
-            term.write("•")
-        end
-        
-        -- Текст загрузки
-        term.setTextColor(colors.white)
-        term.setCursorPos(centerX - 4, centerY + radius + 2)
-        term.write("ameOS")
-        
-        -- Процент
-        term.setCursorPos(centerX - 2, centerY + radius + 3)
-        term.setTextColor(colors.green)
-        term.write(math.floor(progress * 100) .. "%")
-        
-        sleep(0.1)
+    local ext = ""
+    local base = name
+    local dotPos = name:find("%.[^%.]*$")
+    if dotPos then
+        base = name:sub(1, dotPos-1)
+        ext = name:sub(dotPos)
     end
     
-    -- Финальный экран
-    term.setBackgroundColor(colors.black)
-    term.clear()
-    term.setTextColor(colors.cyan)
-    
-    -- Логотип
-    local logo = {
-        "╔══════════════╗",
-        "║    ameOS     ║",
-        "║  LineageOS   ║",
-        "║    Style     ║",
-        "╚══════════════╝"
-    }
-    
-    for i, line in ipairs(logo) do
-        term.setCursorPos(centerX - math.floor(#line/2), centerY - 3 + i)
-        term.write(line)
-        sleep(0.1)
-    end
-    
-    sleep(1)
+    local counter = 1
+    repeat
+        path = fs.combine(dir, base .. "(" .. counter .. ")" .. ext)
+        counter = counter + 1
+    until not fs.exists(path)
+    return path
 end
 
--- Функции интерфейса
+local function normalizePath(path)
+    if path == "" or path == nil then
+        return "/"
+    end
+    path = path:gsub("//+", "/")
+    if path:sub(1, 1) ~= "/" then
+        path = "/" .. path
+    end
+    return path
+end
+
+-- 2. БЕЗОПАСНАЯ БУТ АНИМАЦИЯ (с автоперезапуском)
+local function safeBootAnim()
+    while true do
+        local success, error = pcall(function()
+            local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
+            local duration = 5
+            local start = os.clock()
+            local angle = 0
+            while os.clock() - start < duration do
+                local elapsed = os.clock() - start
+                term.setBackgroundColor(colors.black)
+                term.clear()
+                local fusion = 1.0
+                if elapsed > (duration - 2) then fusion = math.max(0, 1 - (elapsed - (duration - 2)) / 2) end
+                term.setTextColor(colors.cyan)
+                local rX, rY = 2.5 * fusion, 1.5 * fusion
+                for i = 1, 3 do
+                    local a = angle + (i * 2.1)
+                    term.setCursorPos(cx + math.floor(math.cos(a)*rX+0.5), cy + math.floor(math.sin(a)*rY+0.5))
+                    term.write("o")
+                end
+                term.setCursorPos(cx - 2, h - 1)
+                term.setTextColor(colors.white)
+                term.write("ameOS")
+                angle = angle + 0.4
+                sleep(0.05)
+            end
+            return true -- Успешное завершение
+        end)
+        
+        if success then
+            break -- Анимация завершена успешно
+        end
+        -- Если произошла ошибка (Ctrl+T), просто продолжаем цикл - анимация начнется заново
+        -- Никаких сообщений, просто мгновенный перезапуск
+    end
+end
+
+-- 3. RENDERING
 local function drawTopBar()
     local theme = themes[settings.themeIndex]
     local old = term.redirect(topWin)
+    topWin.setCursorBlink(false)
     topWin.setBackgroundColor(theme.accent)
     topWin.setTextColor(theme.text)
     topWin.clear()
-    
-    topWin.setCursorPos(2, 1)
-    topWin.write("ameOS | " .. activeTab)
-    
-    if settings.showClock then
-        topWin.setCursorPos(w - 8, 1)
-        topWin.write(os.date("%H:%M"))
-    end
-    
+    topWin.setCursorPos(2, 1) topWin.write("ameOs | " .. activeTab)
+    topWin.setCursorPos(w - 6, 1)
+    topWin.write(textutils.formatTime(os.time(), true))
     term.redirect(old)
 end
 
 local function drawUI()
     local theme = themes[settings.themeIndex]
-    
-    -- Очищаем и настраиваем основное окно
+    taskWin.setBackgroundColor(colors.black)
+    taskWin.clear()
+    taskWin.setCursorBlink(false)
+    local tabs = { {n="HOME", x=1}, {n="FILE", x=8}, {n="SHLL", x=15}, {n="CONF", x=22} }
+    for _, t in ipairs(tabs) do
+        taskWin.setCursorPos(t.x, 1)
+        taskWin.setBackgroundColor(activeTab == t.n and theme.accent or colors.black)
+        taskWin.setTextColor(activeTab == t.n and theme.text or colors.white)
+        taskWin.write(" "..t.n.." ")
+    end
+    drawTopBar()
     mainWin.setBackgroundColor(theme.bg)
     mainWin.setTextColor(theme.text)
     mainWin.clear()
-    mainWin.setCursorBlink(false)
     
-    -- Очищаем и настраиваем панель задач
-    taskWin.setBackgroundColor(colors.black)
-    taskWin.clear()
-    
-    -- Рисуем вкладки
-    local tabs = {"HOME", "FILE", "CONF"}
-    local x = 2
-    for _, tab in ipairs(tabs) do
-        taskWin.setCursorPos(x, 1)
-        if activeTab == tab then
-            taskWin.setBackgroundColor(theme.accent)
-            taskWin.setTextColor(theme.text)
-        else
-            taskWin.setBackgroundColor(colors.black)
-            taskWin.setTextColor(colors.white)
-        end
-        taskWin.write(" " .. tab .. " ")
-        x = x + #tab + 3
-    end
-    
-    -- Рисуем верхнюю панель
-    drawTopBar()
-    
-    -- Содержимое в зависимости от активной вкладки
     if activeTab == "HOME" then
         local home = getHomeDir()
         if not fs.exists(home) then fs.makeDir(home) end
-        
-        mainWin.setCursorPos(2, 2)
-        mainWin.setTextColor(theme.accent)
-        mainWin.write("Welcome, " .. settings.user .. "!")
-        
-        mainWin.setCursorPos(2, 4)
-        mainWin.setTextColor(theme.text)
-        mainWin.write("Home Directory:")
-        
         local files = fs.list(home)
-        for i, file in ipairs(files) do
-            if i <= h - 6 then
-                mainWin.setCursorPos(4, 5 + i)
-                local isDir = fs.isDir(fs.combine(home, file))
-                mainWin.setTextColor(isDir and colors.yellow or colors.white)
-                mainWin.write((isDir and "📁 " or "📄 ") .. file)
-            end
+        for i, n in ipairs(files) do
+            local col, row = ((i-1)%4)*12+3, math.floor((i-1)/4)*4+1
+            mainWin.setCursorPos(col, row)
+            mainWin.setTextColor(fs.isDir(fs.combine(home, n)) and colors.yellow or colors.blue)
+            mainWin.write("[#]")
+            mainWin.setCursorPos(col-1, row+1)
+            mainWin.setTextColor(colors.white)
+            mainWin.write(n:sub(1, 8))
         end
-        
     elseif activeTab == "FILE" then
-        mainWin.setCursorPos(2, 2)
-        mainWin.setTextColor(theme.accent)
-        mainWin.write("Path: " .. currentPath)
-        
+        mainWin.setCursorPos(1, 1) mainWin.setTextColor(colors.yellow)
+        mainWin.write(" "..normalizePath(currentPath))
         local files = fs.list(currentPath)
-        if currentPath ~= "/" then
-            table.insert(files, 1, "..")
+        if currentPath ~= "/" then table.insert(files, 1, "..") end
+        for i, n in ipairs(files) do
+            if i > h-4 then break end
+            mainWin.setCursorPos(1, i+1)
+            mainWin.setTextColor(fs.isDir(fs.combine(currentPath, n)) and colors.cyan or colors.white)
+            mainWin.write("> "..n)
         end
-        
-        for i, file in ipairs(files) do
-            if i <= h - 4 then
-                mainWin.setCursorPos(2, 3 + i)
-                local path = fs.combine(currentPath, file)
-                local isDir = fs.isDir(path)
-                mainWin.setTextColor(isDir and colors.cyan or colors.white)
-                mainWin.write("> " .. file)
-            end
-        end
-        
     elseif activeTab == "CONF" then
-        mainWin.setCursorPos(2, 2)
-        mainWin.setTextColor(theme.accent)
-        mainWin.write("Settings")
-        
-        mainWin.setCursorPos(2, 4)
-        mainWin.setTextColor(theme.text)
-        mainWin.write("Theme: " .. themes[settings.themeIndex].name)
-        
-        mainWin.setCursorPos(2, 5)
-        mainWin.setTextColor(theme.text)
-        mainWin.write("Sound: " .. (settings.soundEnabled and "ON" or "OFF"))
-        
-        mainWin.setCursorPos(2, 6)
-        mainWin.setTextColor(theme.text)
-        mainWin.write("Show Clock: " .. (settings.showClock and "ON" or "OFF"))
-        
-        mainWin.setCursorPos(2, 8)
-        mainWin.setTextColor(colors.yellow)
-        mainWin.write("[Change Theme]")
-        
-        mainWin.setCursorPos(2, 9)
-        mainWin.setTextColor(colors.yellow)
-        mainWin.write("[Toggle Sound]")
-        
-        mainWin.setCursorPos(2, 10)
-        mainWin.setTextColor(colors.yellow)
-        mainWin.write("[Toggle Clock]")
-        
-        mainWin.setCursorPos(2, 12)
-        mainWin.setTextColor(colors.red)
-        mainWin.write("[Shutdown]")
+        mainWin.setCursorPos(1, 2) mainWin.write(" Theme: "..theme.name)
+        mainWin.setCursorPos(1, 4) mainWin.write(" [ NEXT THEME ]")
+        mainWin.setCursorPos(1, 6) mainWin.setTextColor(colors.yellow)
+        mainWin.write(" [ UPDATE SYSTEM ]")
+        mainWin.setCursorPos(1, 8) mainWin.setTextColor(theme.text)
+        mainWin.write(" [ SHUTDOWN ]")
     end
 end
 
--- Основной цикл
-local function mainLoop()
-    loadSettings()
+-- 4. CONTEXT MENU
+local function showContext(mx, my, file)
+    local opts = file and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}
+    local menuWin = window.create(term.current(), mx, my, 12, #opts)
+    menuWin.setBackgroundColor(colors.gray)
+    menuWin.setTextColor(colors.white)
+    menuWin.clear()
+    menuWin.setCursorBlink(false)
+    for i, o in ipairs(opts) do menuWin.setCursorPos(1, i) menuWin.write(" "..o) end
     
-    -- Запускаем анимацию загрузки
-    lineageBootAnim()
+    local contextTimer = os.startTimer(1)
+    local contextRunning = true
     
-    -- Показываем интерфейс
+    while contextRunning do
+        local ev, p1, p2, p3 = os.pullEvent()
+        
+        if ev == "timer" and (p1 == globalTimer or p1 == contextTimer) then
+            if p1 == globalTimer then
+                drawTopBar()
+                globalTimer = os.startTimer(1)
+            end
+            if p1 == contextTimer then
+                drawTopBar()
+                contextTimer = os.startTimer(1)
+            end
+        
+        elseif ev == "mouse_click" then
+            local btn, cx, cy = p1, p2, p3
+            if cx >= mx and cx < mx+12 and cy >= my and cy < my+#opts then
+                local choice = opts[cy-my+1]
+                local path = (activeTab == "HOME") and getHomeDir() or currentPath
+                
+                if choice == "New File" then 
+                    mainWin.setCursorPos(1,1)
+                    mainWin.write("Name: ") 
+                    local n = read() 
+                    if n~="" then 
+                        local f = fs.open(getUniquePath(path, n), "w")
+                        if f then f.close() end
+                    end
+                elseif choice == "New Folder" then 
+                    mainWin.setCursorPos(1,1)
+                    mainWin.write("Dir: ") 
+                    local n = read() 
+                    if n~="" then fs.makeDir(getUniquePath(path, n)) end
+                elseif choice == "Delete" then 
+                    fs.delete(fs.combine(path, file))
+                elseif choice == "Rename" then 
+                    mainWin.setCursorPos(1,1)
+                    mainWin.write("New: ") 
+                    local n = read() 
+                    if n~="" then 
+                        local newPath = getUniquePath(path, n)
+                        fs.move(fs.combine(path, file), newPath)
+                    end
+                elseif choice == "Copy" then 
+                    clipboard.path = fs.combine(path, file)
+                elseif choice == "Paste" and clipboard.path then 
+                    local newName = fs.getName(clipboard.path)
+                    local destPath = getUniquePath(path, newName)
+                    fs.copy(clipboard.path, destPath)
+                end
+                contextRunning = false
+            else
+                contextRunning = false
+            end
+        end
+    end
+    
+    if contextTimer then
+        os.cancelTimer(contextTimer)
+    end
+    
     drawUI()
-    
-    globalTimer = os.startTimer(0.5)
+end
+
+-- 5. ENGINE
+local function osEngine()
+    drawUI()
+    globalTimer = os.startTimer(1)
     
     while running do
-        local event, p1, p2, p3 = os.pullEvent()
+        local ev, p1, p2, p3 = os.pullEvent()
         
-        if event == "timer" and p1 == globalTimer then
+        if ev == "timer" and p1 == globalTimer then
             drawTopBar()
-            globalTimer = os.startTimer(0.5)
-            
-        elseif event == "mouse_click" then
-            local button, x, y = p1, p2, p3
-            
-            -- Клик по панели задач
+            globalTimer = os.startTimer(1)
+        
+        elseif ev == "mouse_click" then
+            local btn, x, y = p1, p2, p3
             if y == h then
-                if x >= 2 and x <= 6 then
-                    activeTab = "HOME"
-                elseif x >= 9 and x <= 13 then
-                    activeTab = "FILE"
-                elseif x >= 16 and x <= 19 then
-                    activeTab = "CONF"
-                end
-                drawUI()
+                if x >= 1 and x <= 6 then activeTab = "HOME"
+                elseif x >= 8 and x <= 13 then activeTab = "FILE"
+                elseif x >= 15 and x <= 20 then activeTab = "SHLL"
+                elseif x >= 22 and x <= 27 then activeTab = "CONF" end
                 
-            -- Клик в основном окне
-            elseif y > 1 and y < h then
-                if activeTab == "CONF" then
-                    if y == 8 then -- Change Theme
-                        settings.themeIndex = settings.themeIndex + 1
-                        if settings.themeIndex > #themes then
-                            settings.themeIndex = 1
+                if activeTab == "SHLL" then
+                    drawUI()
+                    local old = term.redirect(mainWin)
+                    term.setBackgroundColor(colors.black) term.clear() term.setCursorPos(1,1)
+                    term.setCursorBlink(true)
+                    parallel.waitForAny(
+                        function() shell.run("shell") end,
+                        function()
+                            local lt = os.startTimer(1)
+                            while true do
+                                local e, id, tx, ty = os.pullEvent()
+                                if e == "timer" and id == lt then drawTopBar() lt = os.startTimer(1)
+                                elseif e == "mouse_click" and ty == h then os.queueEvent("mouse_click", 1, tx, ty) return end
+                            end
                         end
-                        saveSettings()
+                    )
+                    term.setCursorBlink(false) term.redirect(old)
+                    activeTab = "HOME"
+                end
+                os.cancelTimer(globalTimer)
+                globalTimer = os.startTimer(0.1)
+                drawUI()
+            elseif activeTab == "FILE" and y > 1 and y < h then
+                local fList = fs.list(currentPath)
+                if currentPath ~= "/" then table.insert(fList, 1, "..") end
+                local sel = fList[y-2]
+                if btn == 2 then 
+                    showContext(x, y, sel)
+                elseif sel then
+                    local p = fs.combine(currentPath, sel)
+                    if fs.isDir(p) then 
+                        currentPath = normalizePath(p)
                         drawUI()
-                    elseif y == 9 then -- Toggle Sound
-                        settings.soundEnabled = not settings.soundEnabled
-                        saveSettings()
-                        drawUI()
-                    elseif y == 10 then -- Toggle Clock
-                        settings.showClock = not settings.showClock
-                        saveSettings()
-                        drawUI()
-                    elseif y == 12 then -- Shutdown
-                        running = false
+                    else 
+                        local old = term.redirect(mainWin) 
+                        term.setCursorBlink(true) 
+                        shell.run("edit", p) 
+                        term.setCursorBlink(false) 
+                        term.redirect(old) 
+                        drawUI() 
                     end
-                    
-                elseif activeTab == "FILE" then
-                    local files = fs.list(currentPath)
-                    if currentPath ~= "/" then
-                        table.insert(files, 1, "..")
+                end
+            elseif activeTab == "HOME" and y > 1 and y < h then
+                local home = getHomeDir()
+                local fList = fs.list(home)
+                local sel = nil
+                for i, n in ipairs(fList) do
+                    local col, row = ((i-1)%4)*12+3, math.floor((i-1)/4)*4+2
+                    if x >= col and x <= col+6 and y >= row and y <= row+1 then sel = n break end
+                end
+                if btn == 2 then 
+                    showContext(x, y, sel)
+                elseif sel then 
+                    local p = fs.combine(home, sel)
+                    if fs.isDir(p) then 
+                        activeTab = "FILE" 
+                        currentPath = normalizePath(p)
+                        drawUI()
+                    else 
+                        local old = term.redirect(mainWin) 
+                        term.setCursorBlink(true) 
+                        shell.run("edit", p) 
+                        term.setCursorBlink(false) 
+                        term.redirect(old) 
+                        drawUI() 
                     end
+                end
+            elseif activeTab == "CONF" then
+                if y == 5 then 
+                    settings.themeIndex = (settings.themeIndex % #themes) + 1 
+                    saveSettings() 
+                    drawUI()
+                elseif y == 7 then 
+                    -- ОБНОВЛЕНИЕ СИСТЕМЫ - ИСПРАВЛЕННАЯ ВЕРСИЯ
+                    mainWin.clear() 
+                    mainWin.setCursorPos(1,1) 
+                    mainWin.setTextColor(colors.yellow)
+                    mainWin.write("Updating system...")
                     
-                    local line = y - 2
-                    if line >= 1 and line <= #files then
-                        local selected = files[line]
-                        local path = fs.combine(currentPath, selected)
+                    -- Создаем временный файл для загрузки
+                    local tempFile = "startup_temp.lua"
+                    local finalFile = "startup.lua"
+                    local url = "https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua"
+                    
+                    -- Пытаемся скачать обновление несколько раз
+                    local downloadSuccess = false
+                    for attempt = 1, 3 do
+                        mainWin.setCursorPos(1, 2)
+                        mainWin.write("Attempt " .. attempt .. "/3...")
                         
-                        if fs.isDir(path) then
-                            currentPath = path
-                            drawUI()
-                        else
-                            shell.run("edit", path)
-                            drawUI()
+                        -- Удаляем старый временный файл если существует
+                        if fs.exists(tempFile) then
+                            fs.delete(tempFile)
+                        end
+                        
+                        -- Пытаемся скачать
+                        if shell.run("wget", url, tempFile) then
+                            if fs.exists(tempFile) then
+                                -- Проверяем что файл не пустой
+                                local file = fs.open(tempFile, "r")
+                                if file then
+                                    local content = file.readAll()
+                                    file.close()
+                                    if content and #content > 100 then  -- Минимальный размер файла
+                                        downloadSuccess = true
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                        
+                        if attempt < 3 then
+                            sleep(2)  -- Ждем перед повторной попыткой
                         end
                     end
+                    
+                    if downloadSuccess then
+                        -- Удаляем старый startup.lua если существует
+                        if fs.exists(finalFile) then
+                            fs.delete(finalFile)
+                        end
+                        
+                        -- Переименовываем временный файл в startup.lua
+                        fs.move(tempFile, finalFile)
+                        
+                        mainWin.setCursorPos(1, 3)
+                        mainWin.setTextColor(colors.lime)
+                        mainWin.write("Update successful! Rebooting...")
+                        sleep(2)
+                        
+                        -- Перезагружаем систему
+                        os.reboot()
+                    else
+                        -- Удаляем временный файл если он существует
+                        if fs.exists(tempFile) then
+                            fs.delete(tempFile)
+                        end
+                        
+                        mainWin.setCursorPos(1, 3)
+                        mainWin.setTextColor(colors.red)
+                        mainWin.write("Update failed! Check connection.")
+                        sleep(3)
+                        drawUI()
+                    end
+                elseif y == 9 then 
+                    running = false 
                 end
             end
         end
     end
-    
-    -- Завершение работы
-    term.setBackgroundColor(colors.black)
-    term.clear()
-    term.setCursorPos(1, 1)
-    term.setTextColor(colors.white)
-    term.write("Shutting down...")
-    sleep(1)
-    term.clear()
 end
 
--- Запускаем систему
-local success, err = pcall(mainLoop)
-if not success then
-    term.setBackgroundColor(colors.black)
-    term.clear()
-    term.setCursorPos(1, 1)
-    term.setTextColor(colors.red)
-    term.write("Error: " .. tostring(err))
-    sleep(3)
+-- 6. ENTRY POINT - С АВТОПЕРЕЗАПУСКОМ
+local function safeStartup()
+    while true do
+        -- Загрузка настроек вне pcall, чтобы если они сломаны - всё равно перезапускалось
+        loadSettings()
+        term.setBackgroundColor(colors.black)
+        term.clear()
+        
+        -- Безопасная загрузочная анимация с автоперезапуском
+        safeBootAnim()
+        
+        -- Безопасный экран входа с автоперезапуском
+        local loginComplete = false
+        
+        while not loginComplete do
+            local success, result = pcall(function()
+                if not settings.isRegistered then
+                    term.setCursorBlink(true)
+                    term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
+                    term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") 
+                    
+                    settings.user = read()
+                    
+                    term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") 
+                    settings.pass = read("*")
+                    
+                    settings.isRegistered = true 
+                    saveSettings()
+                    term.setCursorBlink(false)
+                    return "registered"
+                else
+                    local loginAttempts = 0
+                    
+                    while true do
+                        term.setCursorBlink(true)
+                        term.clear()
+                        term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: "..settings.user)
+                        term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
+                        
+                        local password = read("*")
+                        
+                        if password == settings.pass then 
+                            term.setCursorBlink(false)
+                            return "login_success"
+                        else
+                            loginAttempts = loginAttempts + 1
+                            term.setCursorPos(w/2-8, h/2+3)
+                            term.setTextColor(colors.red)
+                            term.write("Wrong password! Try: " .. loginAttempts)
+                            sleep(1.5)
+                        end
+                    end
+                end
+            end)
+            
+            if success and (result == "registered" or result == "login_success") then
+                loginComplete = true
+                break
+            end
+            -- Если произошла ошибка (Ctrl+T), просто продолжаем цикл - экран входа перезапустится
+            -- Никаких сообщений, никаких задержек
+        end
+        
+        -- Если дошли сюда, значит успешно вошли в систему
+        -- Запускаем основную ОС (она тоже будет в бесконечном цикле)
+        local osSuccess, osError = pcall(osEngine)
+        
+        -- Если ОС завершилась (например, через shutdown) или упала, перезапускаем всё
+        if not osSuccess then
+            -- Если ОС упала с ошибкой, просто продолжаем внешний цикл - всё перезапустится
+            -- Можно добавить небольшую задержку, чтобы не зациклиться мгновенно
+            sleep(0.1)
+        elseif osError == "restart" then
+            -- Если ОС запросила перезагрузку
+            sleep(0.1)
+            -- continue loop
+        else
+            -- Нормальное завершение
+            break
+        end
+    end
 end
+
+-- ЗАПУСКАЕМ ВСЁ С ЗАЩИТОЙ
+safeStartup()
