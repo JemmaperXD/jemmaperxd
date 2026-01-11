@@ -1,4 +1,4 @@
--- ameOs v47.0 [EDIT CLOCK & APP RECOVERY FIX]
+-- ameOs v48.0 [NON-BLOCKING CONTEXT & PATH FIX]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -6,6 +6,7 @@ local activeTab = "HOME"
 local currentPath = "/"
 local clipboard = { path = nil }
 local globalTimer = nil
+local contextMenu = nil -- Состояние меню: {x, y, options, file}
 
 local themes = {
     { name = "Night",     bg = colors.black, accent = colors.gray, text = colors.lightGray },
@@ -36,34 +37,7 @@ local function loadSettings()
     end
 end
 
--- 2. BOOT
-local function bootAnim()
-    local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
-    local duration = 5
-    local start = os.clock()
-    local angle = 0
-    while os.clock() - start < duration do
-        local elapsed = os.clock() - start
-        term.setBackgroundColor(colors.black)
-        term.clear()
-        local fusion = 1.0
-        if elapsed > (duration - 2) then fusion = math.max(0, 1 - (elapsed - (duration - 2)) / 2) end
-        term.setTextColor(colors.cyan)
-        local rX, rY = 2.5 * fusion, 1.5 * fusion
-        for i = 1, 3 do
-            local a = angle + (i * 2.1)
-            term.setCursorPos(cx + math.floor(math.cos(a)*rX+0.5), cy + math.floor(math.sin(a)*rY+0.5))
-            term.write("o")
-        end
-        term.setCursorPos(cx - 2, h - 1)
-        term.setTextColor(colors.white)
-        term.write("ameOS")
-        angle = angle + 0.4
-        sleep(0.05)
-    end
-end
-
--- 3. DRAWING
+-- 2. DRAWING
 local function drawTopBar()
     local theme = themes[settings.themeIndex]
     local old = term.redirect(topWin)
@@ -77,16 +51,11 @@ local function drawTopBar()
     term.redirect(old)
 end
 
-local function resetTimer()
-    if globalTimer then os.cancelTimer(globalTimer) end
-    globalTimer = os.startTimer(1)
-end
-
 local function drawUI()
     local theme = themes[settings.themeIndex]
+    -- Таскбар
     taskWin.setBackgroundColor(colors.black)
     taskWin.clear()
-    taskWin.setCursorBlink(false)
     local tabs = { {n="HOME", x=1}, {n="FILE", x=8}, {n="SHLL", x=15}, {n="CONF", x=22} }
     for _, t in ipairs(tabs) do
         taskWin.setCursorPos(t.x, 1)
@@ -94,7 +63,10 @@ local function drawUI()
         taskWin.setTextColor(activeTab == t.n and theme.text or colors.white)
         taskWin.write(" "..t.n.." ")
     end
+    
     drawTopBar()
+    
+    -- Главное окно
     mainWin.setBackgroundColor(theme.bg)
     mainWin.setTextColor(theme.text)
     mainWin.clear()
@@ -113,13 +85,14 @@ local function drawUI()
             mainWin.write(n:sub(1, 8))
         end
     elseif activeTab == "FILE" then
-        mainWin.setCursorPos(1, 1) mainWin.setTextColor(colors.yellow)
-        mainWin.write(" "..currentPath)
+        mainWin.setCursorPos(1, 1) 
+        mainWin.setTextColor(colors.yellow)
+        mainWin.write(" " .. currentPath) -- ВСЕГДА ПИШЕМ ПУТЬ
         local files = fs.list(currentPath)
         if currentPath ~= "/" then table.insert(files, 1, "..") end
         for i, n in ipairs(files) do
             if i > h-4 then break end
-            mainWin.setCursorPos(1, i+1)
+            mainWin.setCursorPos(1, i+2) -- Сдвиг на 2, чтобы не тереть путь
             mainWin.setTextColor(fs.isDir(fs.combine(currentPath, n)) and colors.cyan or colors.white)
             mainWin.write("> "..n)
         end
@@ -131,48 +104,49 @@ local function drawUI()
         mainWin.setCursorPos(1, 8) mainWin.setTextColor(theme.text)
         mainWin.write(" [ SHUTDOWN ]")
     end
+
+    -- Отрисовка контекстного меню (если открыто)
+    if contextMenu then
+        local mx, my = contextMenu.x, contextMenu.y
+        for i, opt in ipairs(contextMenu.options) do
+            term.setCursorPos(mx, my + i - 1)
+            term.setBackgroundColor(colors.gray)
+            term.setTextColor(colors.white)
+            term.write(" " .. opt .. " ")
+        end
+    end
 end
 
--- 4. APPS WRAPPER
+-- 3. ACTIONS
+local function handleContext(choice, file)
+    local path = (activeTab == "HOME") and getHomeDir() or currentPath
+    mainWin.setCursorPos(1,1)
+    mainWin.setBackgroundColor(colors.black)
+    mainWin.clearLine()
+    if choice == "New File" then mainWin.write("Name: ") local n = read() if n~="" then fs.open(fs.combine(path, n), "w").close() end
+    elseif choice == "New Folder" then mainWin.write("Dir: ") local n = read() if n~="" then fs.makeDir(fs.combine(path, n)) end
+    elseif choice == "Delete" then fs.delete(fs.combine(path, file))
+    elseif choice == "Rename" then mainWin.write("New: ") local n = read() if n~="" then fs.move(fs.combine(path, file), fs.combine(path, n)) end
+    elseif choice == "Copy" then clipboard.path = fs.combine(path, file)
+    elseif choice == "Paste" and clipboard.path then fs.copy(clipboard.path, fs.combine(path, fs.getName(clipboard.path))) end
+    contextMenu = nil
+    drawUI()
+end
+
 local function runExternal(cmd, arg)
     local old = term.redirect(mainWin)
     term.setCursorBlink(true)
-    if arg then shell.run(cmd, arg) else shell.run(cmd) end
+    shell.run(cmd, arg or "")
     term.setCursorBlink(false)
     term.redirect(old)
-    resetTimer() -- ПРИНУДИТЕЛЬНЫЙ СБРОС ТАЙМЕРА ПОСЛЕ ВЫХОДА
     drawUI()
 end
 
--- 5. CONTEXT MENU
-local function showContext(mx, my, file)
-    local opts = file and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}
-    local menuWin = window.create(term.current(), mx, my, 12, #opts)
-    menuWin.setBackgroundColor(colors.gray)
-    menuWin.setTextColor(colors.white)
-    menuWin.clear()
-    menuWin.setCursorBlink(false)
-    for i, o in ipairs(opts) do menuWin.setCursorPos(1, i) menuWin.write(" "..o) end
-    
-    local _, btn, cx, cy = os.pullEvent("mouse_click")
-    if cx >= mx and cx < mx+12 and cy >= my and cy < my+#opts then
-        local choice = opts[cy-my+1]
-        local path = (activeTab == "HOME") and getHomeDir() or currentPath
-        mainWin.setCursorPos(1,1)
-        if choice == "New File" then mainWin.write("Name: ") local n = read() if n~="" then fs.open(fs.combine(path, n), "w").close() end
-        elseif choice == "New Folder" then mainWin.write("Dir: ") local n = read() if n~="" then fs.makeDir(fs.combine(path, n)) end
-        elseif choice == "Delete" then fs.delete(fs.combine(path, file))
-        elseif choice == "Rename" then mainWin.write("New: ") local n = read() if n~="" then fs.move(fs.combine(path, file), fs.combine(path, n)) end
-        elseif choice == "Copy" then clipboard.path = fs.combine(path, file)
-        elseif choice == "Paste" and clipboard.path then fs.copy(clipboard.path, fs.combine(path, fs.getName(clipboard.path))) end
-    end
-    drawUI()
-end
-
--- 6. ENGINE
+-- 4. ENGINE
 local function osEngine()
+    loadSettings()
     drawUI()
-    resetTimer()
+    globalTimer = os.startTimer(1)
     
     while running do
         local ev, p1, p2, p3 = os.pullEvent()
@@ -183,7 +157,16 @@ local function osEngine()
         
         elseif ev == "mouse_click" then
             local btn, x, y = p1, p2, p3
-            if y == h then
+            
+            -- Если меню открыто, проверяем клик по нему
+            if contextMenu then
+                if x >= contextMenu.x and x <= contextMenu.x + 12 and y >= contextMenu.y and y < contextMenu.y + #contextMenu.options then
+                    handleContext(contextMenu.options[y - contextMenu.y + 1], contextMenu.file)
+                else
+                    contextMenu = nil
+                    drawUI()
+                end
+            elseif y == h then -- ТАСКБАР
                 if x >= 1 and x <= 6 then activeTab = "HOME"
                 elseif x >= 8 and x <= 13 then activeTab = "FILE"
                 elseif x >= 15 and x <= 20 then activeTab = "SHLL"
@@ -204,38 +187,38 @@ local function osEngine()
                     )
                     activeTab = "HOME"
                 end
-                resetTimer()
                 drawUI()
             elseif activeTab == "FILE" and y > 1 and y < h then
-                local fList = fs.list(currentPath)
-                if currentPath ~= "/" then table.insert(fList, 1, "..") end
-                local sel = fList[y-2]
-                if btn == 2 then showContext(x, y, sel)
+                local files = fs.list(currentPath)
+                if currentPath ~= "/" then table.insert(files, 1, "..") end
+                local sel = files[y-2]
+                if btn == 2 then
+                    contextMenu = { x=x, y=y, options = sel and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}, file = sel }
+                    drawUI()
                 elseif sel then
                     local p = fs.combine(currentPath, sel)
-                    if fs.isDir(p) then currentPath = p drawUI()
-                    else runExternal("edit", p) end
+                    if fs.isDir(p) then currentPath = p drawUI() else runExternal("edit", p) end
                 end
             elseif activeTab == "HOME" and y > 1 and y < h then
                 local home = getHomeDir()
-                local fList = fs.list(home)
+                local files = fs.list(home)
                 local sel = nil
-                for i, n in ipairs(fList) do
+                for i, n in ipairs(files) do
                     local col, row = ((i-1)%4)*12+3, math.floor((i-1)/4)*4+2
                     if x >= col and x <= col+6 and y >= row and y <= row+1 then sel = n break end
                 end
-                if btn == 2 then showContext(x, y, sel)
+                if btn == 2 then
+                    contextMenu = { x=x, y=y, options = sel and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}, file = sel }
+                    drawUI()
                 elseif sel then 
                     local p = fs.combine(home, sel)
-                    if fs.isDir(p) then activeTab = "FILE" currentPath = p drawUI()
-                    else runExternal("edit", p) end
+                    if fs.isDir(p) then activeTab = "FILE" currentPath = p drawUI() else runExternal("edit", p) end
                 end
             elseif activeTab == "CONF" then
                 if y == 5 then settings.themeIndex = (settings.themeIndex % #themes) + 1 saveSettings() drawUI()
                 elseif y == 7 then 
                     mainWin.clear() mainWin.setCursorPos(1,1) print("Updating...")
-                    if fs.exists("startup.lua") then fs.delete("startup.lua") end
-                    shell.run("wget https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua startup.lua")
+                    fs.delete("startup.lua") shell.run("wget https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua startup.lua")
                     os.reboot()
                 elseif y == 9 then running = false end
             end
@@ -243,22 +226,8 @@ local function osEngine()
     end
 end
 
--- 7. LOGIN
-bootAnim()
-loadSettings()
-term.setBackgroundColor(colors.black)
-term.clear()
-if not settings.isRegistered then
-    term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
-    term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") settings.user = read()
-    term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") settings.pass = read("*")
-    settings.isRegistered = true saveSettings()
-else
-    while true do
-        term.clear()
-        term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: "..settings.user)
-        term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
-        if read("*") == settings.pass then break end
-    end
+-- 5. START
+if fs.exists("/startup.lua") then -- Анимация только при первом запуске
+    bootAnim()
 end
 osEngine()
