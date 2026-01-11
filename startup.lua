@@ -1,4 +1,4 @@
--- ameOs v70.0 [STABLE: FIXED CLOCK, PATH, CURSOR & FS]
+-- ameOs v71.0 [STABLE: FIXED CLOCK, PATH, CURSOR & FS PROTECTION]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -40,11 +40,11 @@ local function loadSettings()
     end
 end
 
--- 2. АНИМАЦИЯ ЗАГРУЗКИ
+-- 2. АНИМАЦИЯ
 local function bootAnim()
     local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
     local angle = 0
-    for i = 1, 40 do
+    for i = 1, 30 do
         term.setBackgroundColor(colors.black)
         term.clear()
         term.setTextColor(colors.cyan)
@@ -69,13 +69,11 @@ local function drawTopBar()
     topWin.setTextColor(theme.text)
     topWin.clear()
     
-    -- ПУТЬ
     topWin.setCursorPos(2, 1)
     local title = "ameOs | " .. activeTab
     if activeTab == "FILE" then title = title .. ": " .. currentPath end
     topWin.write(title:sub(1, w - 10))
     
-    -- ЧАСЫ
     local timeStr = textutils.formatTime(os.time(), true)
     topWin.setCursorPos(w - #timeStr, 1)
     topWin.write(timeStr)
@@ -84,7 +82,7 @@ end
 
 local function drawUI()
     local theme = themes[settings.themeIndex]
-    term.setCursorBlink(false) -- ЖЕСТКО ВЫКЛЮЧАЕМ КУРСОР
+    term.setCursorBlink(false)
 
     taskWin.setBackgroundColor(colors.black)
     taskWin.clear()
@@ -133,7 +131,44 @@ local function drawUI()
     end
 end
 
--- 4. ДВИЖОК
+-- 4. МЕНЮ И ЗАЩИТА ФС
+local function showContext(mx, my, file)
+    local opts = file and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}
+    local menuWin = window.create(term.current(), mx, my, 12, #opts)
+    menuWin.setBackgroundColor(colors.gray)
+    menuWin.setTextColor(colors.white)
+    menuWin.clear()
+    for i, o in ipairs(opts) do menuWin.setCursorPos(1, i) menuWin.write(" "..o) end
+    
+    local _, btn, cx, cy = os.pullEvent("mouse_click")
+    if cx >= mx and cx < mx+12 and cy >= my and cy < my+#opts then
+        local choice = opts[cy-my+1]
+        local path = (activeTab == "HOME") and getHomeDir() or currentPath
+        
+        if choice == "New File" or choice == "New Folder" or choice == "Rename" then
+            term.setCursorPos(1, h) term.setBackgroundColor(colors.black) term.clearLine()
+            term.write("Name: ") term.setCursorBlink(true)
+            local n = read() term.setCursorBlink(false)
+            if n and n ~= "" then
+                local target = fs.combine(path, n)
+                -- ЗАЩИТА ОТ КРАША: Проверяем существование перед действием
+                if not fs.exists(target) then
+                    if choice == "New File" then fs.open(target, "w").close()
+                    elseif choice == "New Folder" then fs.makeDir(target)
+                    elseif choice == "Rename" and file then fs.move(fs.combine(path, file), target) end
+                end
+            end
+        elseif choice == "Delete" and file then fs.delete(fs.combine(path, file))
+        elseif choice == "Copy" and file then clipboard.path = fs.combine(path, file)
+        elseif choice == "Paste" and clipboard.path then 
+            local target = fs.combine(path, fs.getName(clipboard.path))
+            if not fs.exists(target) then fs.copy(clipboard.path, target) end
+        end
+    end
+    drawUI()
+end
+
+-- 5. ДВИЖОК
 local function osEngine()
     drawUI()
     while running do
@@ -161,10 +196,11 @@ local function osEngine()
                 end
                 drawUI()
             elseif activeTab == "FILE" and y > 1 and y < h then
-                local files = fs.list(currentPath)
-                if currentPath ~= "/" then table.insert(files, 1, "..") end
-                local sel = files[y - 1]
-                if sel then
+                local fList = fs.list(currentPath)
+                if currentPath ~= "/" then table.insert(fList, 1, "..") end
+                local sel = fList[y-1]
+                if btn == 2 then showContext(x, y, sel)
+                elseif sel then
                     local p = fs.combine(currentPath, sel)
                     if fs.isDir(p) then currentPath = p drawUI() else 
                         local old = term.redirect(mainWin) shell.run("edit", p) term.redirect(old) drawUI()
@@ -172,13 +208,14 @@ local function osEngine()
                 end
             elseif activeTab == "HOME" and y > 1 and y < h then
                 local home = getHomeDir()
-                local files = fs.list(home)
+                local fList = fs.list(home)
                 local sel = nil
-                for i, n in ipairs(files) do
+                for i, n in ipairs(fList) do
                     local col, row = ((i-1)%4)*12+3, math.floor((i-1)/4)*4+2
                     if x >= col and x <= col+6 and y >= row and y <= row+1 then sel = n break end
                 end
-                if sel then 
+                if btn == 2 then showContext(x, y, sel)
+                elseif sel then 
                     local p = fs.combine(home, sel)
                     if fs.isDir(p) then activeTab = "FILE" currentPath = p drawUI() else
                         local old = term.redirect(mainWin) shell.run("edit", p) term.redirect(old) drawUI()
@@ -198,7 +235,7 @@ local function osEngine()
     end
 end
 
--- 5. ТОЧКА ВХОДА
+-- 6. СТАРТ
 loadSettings()
 bootAnim()
 term.setBackgroundColor(colors.black)
