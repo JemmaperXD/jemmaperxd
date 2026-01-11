@@ -6,32 +6,14 @@ local activeTab = "HOME"
 local currentPath = "/"
 local clipboard = { path = nil }
 local globalTimer = nil
-local settingsPage = 1
-local MAX_SETTINGS_PAGES = 3
 
 local themes = {
     { name = "Dark Moss", bg = colors.black, accent = colors.green, text = colors.gray },
     { name = "Abyss",     bg = colors.black, accent = colors.cyan, text = colors.gray },
     { name = "Charcoal",  bg = colors.black, accent = colors.gray, text = colors.lightGray },
-    { name = "Slate",     bg = colors.black, accent = colors.lightGray, text = colors.gray },
-    { name = "Solarized", bg = colors.black, accent = colors.orange, text = colors.lightBlue },
-    { name = "Midnight",  bg = colors.black, accent = colors.purple, text = colors.white }
+    { name = "Slate",     bg = colors.black, accent = colors.lightGray, text = colors.gray }
 }
-
-local settings = { 
-    themeIndex = 1, 
-    user = "User", 
-    pass = "", 
-    isRegistered = false,
-    showHidden = false,
-    autoUpdate = true,
-    animations = true,
-    clock24h = true,
-    soundEnabled = true,
-    startupDelay = 0,
-    screenSaver = true,
-    screenSaverTime = 300
-}
+local settings = { themeIndex = 1, user = "User", pass = "", isRegistered = false }
 
 local topWin = window.create(term.current(), 1, 1, w, 1)
 local mainWin = window.create(term.current(), 1, 2, w, h - 2)
@@ -53,9 +35,7 @@ local function loadSettings()
         local data = f.readAll() f.close()
         local decoded = textutils.unserialize(data or "")
         if type(decoded) == "table" then 
-            for k, v in pairs(decoded) do
-                settings[k] = v
-            end
+            settings = decoded 
             if settings.themeIndex > #themes then
                 settings.themeIndex = 1
             end
@@ -121,12 +101,14 @@ local function safeBootAnim()
                 angle = angle + 0.4
                 sleep(0.05)
             end
-            return true
+            return true -- Успешное завершение
         end)
         
         if success then
-            break
+            break -- Анимация завершена успешно
         end
+        -- Если произошла ошибка (Ctrl+T), просто продолжаем цикл - анимация начнется заново
+        -- Никаких сообщений, просто мгновенный перезапуск
     end
 end
 
@@ -140,7 +122,7 @@ local function drawTopBar()
     topWin.clear()
     topWin.setCursorPos(2, 1) topWin.write("ameOs | " .. activeTab)
     topWin.setCursorPos(w - 6, 1)
-    topWin.write(textutils.formatTime(os.time(), settings.clock24h))
+    topWin.write(textutils.formatTime(os.time(), true))
     term.redirect(old)
 end
 
@@ -179,105 +161,19 @@ local function drawUI()
         mainWin.write(" "..normalizePath(currentPath))
         local files = fs.list(currentPath)
         if currentPath ~= "/" then table.insert(files, 1, "..") end
-        local visibleFiles = {}
-        for _, n in ipairs(files) do
-            if settings.showHidden or not n:sub(1,1) == "." then
-                table.insert(visibleFiles, n)
-            end
-        end
-        for i, n in ipairs(visibleFiles) do
+        for i, n in ipairs(files) do
             if i > h-4 then break end
             mainWin.setCursorPos(1, i+1)
             mainWin.setTextColor(fs.isDir(fs.combine(currentPath, n)) and colors.cyan or colors.white)
             mainWin.write("> "..n)
         end
     elseif activeTab == "CONF" then
-        mainWin.setCursorPos(1, 1)
-        mainWin.setTextColor(theme.accent)
-        mainWin.write("Settings (Page " .. settingsPage .. "/" .. MAX_SETTINGS_PAGES .. ")")
-        
-        if settingsPage == 1 then
-            -- Page 1: Appearance
-            mainWin.setCursorPos(1, 3)
-            mainWin.setTextColor(theme.text)
-            mainWin.write("Theme: " .. theme.name)
-            mainWin.setCursorPos(1, 4)
-            mainWin.write(" [ NEXT THEME ]")
-            
-            mainWin.setCursorPos(1, 6)
-            mainWin.write("Animations: " .. (settings.animations and "ON" or "OFF"))
-            mainWin.setCursorPos(1, 7)
-            mainWin.write(" [ TOGGLE ANIMATIONS ]")
-            
-            mainWin.setCursorPos(1, 9)
-            mainWin.write("Clock Format: " .. (settings.clock24h and "24H" or "12H"))
-            mainWin.setCursorPos(1, 10)
-            mainWin.write(" [ TOGGLE CLOCK ]")
-            
-            mainWin.setCursorPos(1, 12)
-            mainWin.write("Show Hidden: " .. (settings.showHidden and "YES" or "NO"))
-            mainWin.setCursorPos(1, 13)
-            mainWin.write(" [ TOGGLE HIDDEN ]")
-            
-        elseif settingsPage == 2 then
-            -- Page 2: System
-            mainWin.setCursorPos(1, 3)
-            mainWin.setTextColor(theme.text)
-            mainWin.write("Auto Update: " .. (settings.autoUpdate and "ON" or "OFF"))
-            mainWin.setCursorPos(1, 4)
-            mainWin.write(" [ TOGGLE AUTO UPDATE ]")
-            
-            mainWin.setCursorPos(1, 6)
-            mainWin.write("Sound: " .. (settings.soundEnabled and "ON" or "OFF"))
-            mainWin.setCursorPos(1, 7)
-            mainWin.write(" [ TOGGLE SOUND ]")
-            
-            mainWin.setCursorPos(1, 9)
-            mainWin.write("Startup Delay: " .. settings.startupDelay .. "s")
-            mainWin.setCursorPos(1, 10)
-            mainWin.write(" [ SET DELAY (0-5) ]")
-            
-            mainWin.setCursorPos(1, 12)
-            mainWin.write("Screen Saver: " .. (settings.screenSaver and "ON" or "OFF"))
-            mainWin.setCursorPos(1, 13)
-            mainWin.write(" [ TOGGLE SCREEN SAVER ]")
-            
-        elseif settingsPage == 3 then
-            -- Page 3: Account & Power
-            mainWin.setCursorPos(1, 3)
-            mainWin.setTextColor(theme.text)
-            mainWin.write("User: " .. settings.user)
-            mainWin.setCursorPos(1, 4)
-            mainWin.write(" [ CHANGE USERNAME ]")
-            
-            mainWin.setCursorPos(1, 6)
-            mainWin.write(" [ CHANGE PASSWORD ]")
-            
-            mainWin.setCursorPos(1, 8)
-            mainWin.write(" [ EXPORT SETTINGS ]")
-            
-            mainWin.setCursorPos(1, 10)
-            mainWin.write(" [ IMPORT SETTINGS ]")
-            
-            mainWin.setCursorPos(1, 12)
-            mainWin.setTextColor(colors.yellow)
-            mainWin.write(" [ UPDATE SYSTEM ]")
-            
-            mainWin.setCursorPos(1, 14)
-            mainWin.setTextColor(colors.red)
-            mainWin.write(" [ SHUTDOWN ]")
-        end
-        
-        -- Navigation
-        mainWin.setCursorPos(w - 10, h - 3)
-        mainWin.setTextColor(theme.accent)
-        if settingsPage > 1 then
-            mainWin.write("[ PREV ]")
-        end
-        mainWin.setCursorPos(w - 3, h - 3)
-        if settingsPage < MAX_SETTINGS_PAGES then
-            mainWin.write("[ NEXT ]")
-        end
+        mainWin.setCursorPos(1, 2) mainWin.write(" Theme: "..theme.name)
+        mainWin.setCursorPos(1, 4) mainWin.write(" [ NEXT THEME ]")
+        mainWin.setCursorPos(1, 6) mainWin.setTextColor(colors.yellow)
+        mainWin.write(" [ UPDATE SYSTEM ]")
+        mainWin.setCursorPos(1, 8) mainWin.setTextColor(theme.text)
+        mainWin.write(" [ SHUTDOWN ]")
     end
 end
 
@@ -402,13 +298,7 @@ local function osEngine()
             elseif activeTab == "FILE" and y > 1 and y < h then
                 local fList = fs.list(currentPath)
                 if currentPath ~= "/" then table.insert(fList, 1, "..") end
-                local visibleFiles = {}
-                for _, n in ipairs(fList) do
-                    if settings.showHidden or not n:sub(1,1) == "." then
-                        table.insert(visibleFiles, n)
-                    end
-                end
-                local sel = visibleFiles[y-2]
+                local sel = fList[y-2]
                 if btn == 2 then 
                     showContext(x, y, sel)
                 elseif sel then
@@ -451,216 +341,84 @@ local function osEngine()
                     end
                 end
             elseif activeTab == "CONF" then
-                -- Navigation
-                if x >= w - 10 and x <= w - 4 and y == h - 3 and settingsPage > 1 then
-                    settingsPage = settingsPage - 1
+                if y == 5 then 
+                    settings.themeIndex = (settings.themeIndex % #themes) + 1 
+                    saveSettings() 
                     drawUI()
-                elseif x >= w - 3 and x <= w and y == h - 3 and settingsPage < MAX_SETTINGS_PAGES then
-                    settingsPage = settingsPage + 1
-                    drawUI()
-                elseif settingsPage == 1 then
-                    -- Page 1: Appearance
-                    if y == 5 then 
-                        settings.themeIndex = (settings.themeIndex % #themes) + 1 
-                        saveSettings() 
-                        drawUI()
-                    elseif y == 8 then 
-                        settings.animations = not settings.animations
-                        saveSettings()
-                        drawUI()
-                    elseif y == 11 then 
-                        settings.clock24h = not settings.clock24h
-                        saveSettings()
-                        drawUI()
-                    elseif y == 14 then 
-                        settings.showHidden = not settings.showHidden
-                        saveSettings()
-                        drawUI()
-                    end
-                elseif settingsPage == 2 then
-                    -- Page 2: System
-                    if y == 5 then 
-                        settings.autoUpdate = not settings.autoUpdate
-                        saveSettings()
-                        drawUI()
-                    elseif y == 8 then 
-                        settings.soundEnabled = not settings.soundEnabled
-                        saveSettings()
-                        drawUI()
-                    elseif y == 11 then 
-                        mainWin.setCursorPos(1, 10)
-                        mainWin.clearLine()
-                        mainWin.write("Delay (0-5): ")
-                        local delay = tonumber(read())
-                        if delay and delay >= 0 and delay <= 5 then
-                            settings.startupDelay = delay
-                            saveSettings()
+                elseif y == 7 then 
+                    -- ОБНОВЛЕНИЕ СИСТЕМЫ - ИСПРАВЛЕННАЯ ВЕРСИЯ
+                    mainWin.clear() 
+                    mainWin.setCursorPos(1,1) 
+                    mainWin.setTextColor(colors.yellow)
+                    mainWin.write("Updating system...")
+                    
+                    -- Создаем временный файл для загрузки
+                    local tempFile = "startup_temp.lua"
+                    local finalFile = "startup.lua"
+                    local url = "https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua"
+                    
+                    -- Пытаемся скачать обновление несколько раз
+                    local downloadSuccess = false
+                    for attempt = 1, 3 do
+                        mainWin.setCursorPos(1, 2)
+                        mainWin.write("Attempt " .. attempt .. "/3...")
+                        
+                        -- Удаляем старый временный файл если существует
+                        if fs.exists(tempFile) then
+                            fs.delete(tempFile)
                         end
-                        drawUI()
-                    elseif y == 14 then 
-                        settings.screenSaver = not settings.screenSaver
-                        saveSettings()
-                        drawUI()
-                    end
-                elseif settingsPage == 3 then
-                    -- Page 3: Account & Power
-                    if y == 5 then 
-                        mainWin.setCursorPos(1, 4)
-                        mainWin.clearLine()
-                        mainWin.write("New username: ")
-                        local newUser = read()
-                        if newUser and newUser ~= "" then
-                            local oldHome = getHomeDir()
-                            settings.user = newUser
-                            local newHome = getHomeDir()
-                            if fs.exists(oldHome) and oldHome ~= newHome then
-                                fs.move(oldHome, newHome)
+                        
+                        -- Пытаемся скачать
+                        if shell.run("wget", url, tempFile) then
+                            if fs.exists(tempFile) then
+                                -- Проверяем что файл не пустой
+                                local file = fs.open(tempFile, "r")
+                                if file then
+                                    local content = file.readAll()
+                                    file.close()
+                                    if content and #content > 100 then  -- Минимальный размер файла
+                                        downloadSuccess = true
+                                        break
+                                    end
+                                end
                             end
-                            saveSettings()
                         end
-                        drawUI()
-                    elseif y == 7 then 
-                        mainWin.setCursorPos(1, 6)
-                        mainWin.clearLine()
-                        mainWin.write("Old password: ")
-                        local oldPass = read("*")
-                        if oldPass == settings.pass then
-                            mainWin.setCursorPos(1, 7)
-                            mainWin.write("New password: ")
-                            local newPass = read("*")
-                            settings.pass = newPass
-                            saveSettings()
-                            mainWin.setCursorPos(1, 8)
-                            mainWin.setTextColor(colors.lime)
-                            mainWin.write("Password changed!")
-                            sleep(1.5)
-                        else
-                            mainWin.setCursorPos(1, 8)
-                            mainWin.setTextColor(colors.red)
-                            mainWin.write("Wrong password!")
-                            sleep(1.5)
+                        
+                        if attempt < 3 then
+                            sleep(2)  -- Ждем перед повторной попыткой
                         end
-                        drawUI()
-                    elseif y == 9 then 
-                        -- Export settings
-                        local exportPath = fs.combine(getHomeDir(), "ame_settings_export.cfg")
-                        local f = fs.open(exportPath, "w")
-                        local exportData = {
-                            themeIndex = settings.themeIndex,
-                            showHidden = settings.showHidden,
-                            autoUpdate = settings.autoUpdate,
-                            animations = settings.animations,
-                            clock24h = settings.clock24h,
-                            soundEnabled = settings.soundEnabled,
-                            startupDelay = settings.startupDelay,
-                            screenSaver = settings.screenSaver
-                        }
-                        f.write(textutils.serialize(exportData))
-                        f.close()
-                        mainWin.setCursorPos(1, 10)
+                    end
+                    
+                    if downloadSuccess then
+                        -- Удаляем старый startup.lua если существует
+                        if fs.exists(finalFile) then
+                            fs.delete(finalFile)
+                        end
+                        
+                        -- Переименовываем временный файл в startup.lua
+                        fs.move(tempFile, finalFile)
+                        
+                        mainWin.setCursorPos(1, 3)
                         mainWin.setTextColor(colors.lime)
-                        mainWin.write("Settings exported!")
-                        sleep(1.5)
-                        drawUI()
-                    elseif y == 11 then 
-                        -- Import settings
-                        mainWin.setCursorPos(1, 10)
-                        mainWin.clearLine()
-                        mainWin.write("Import file: ")
-                        local importFile = read()
-                        if fs.exists(importFile) then
-                            local f = fs.open(importFile, "r")
-                            local data = f.readAll()
-                            f.close()
-                            local importData = textutils.unserialize(data)
-                            if importData then
-                                for k, v in pairs(importData) do
-                                    if k ~= "user" and k ~= "pass" and k ~= "isRegistered" then
-                                        settings[k] = v
-                                    end
-                                end
-                                saveSettings()
-                                mainWin.setCursorPos(1, 11)
-                                mainWin.setTextColor(colors.lime)
-                                mainWin.write("Settings imported!")
-                            else
-                                mainWin.setCursorPos(1, 11)
-                                mainWin.setTextColor(colors.red)
-                                mainWin.write("Invalid file!")
-                            end
-                        else
-                            mainWin.setCursorPos(1, 11)
-                            mainWin.setTextColor(colors.red)
-                            mainWin.write("File not found!")
-                        end
+                        mainWin.write("Update successful! Rebooting...")
                         sleep(2)
+                        
+                        -- Перезагружаем систему
+                        os.reboot()
+                    else
+                        -- Удаляем временный файл если он существует
+                        if fs.exists(tempFile) then
+                            fs.delete(tempFile)
+                        end
+                        
+                        mainWin.setCursorPos(1, 3)
+                        mainWin.setTextColor(colors.red)
+                        mainWin.write("Update failed! Check connection.")
+                        sleep(3)
                         drawUI()
-                    elseif y == 13 then 
-                        -- UPDATE SYSTEM
-                        mainWin.clear() 
-                        mainWin.setCursorPos(1,1) 
-                        mainWin.setTextColor(colors.yellow)
-                        mainWin.write("Updating system...")
-                        
-                        local tempFile = "startup_temp.lua"
-                        local finalFile = "startup.lua"
-                        local url = "https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua"
-                        
-                        local downloadSuccess = false
-                        for attempt = 1, 3 do
-                            mainWin.setCursorPos(1, 2)
-                            mainWin.write("Attempt " .. attempt .. "/3...")
-                            
-                            if fs.exists(tempFile) then
-                                fs.delete(tempFile)
-                            end
-                            
-                            if shell.run("wget", url, tempFile) then
-                                if fs.exists(tempFile) then
-                                    local file = fs.open(tempFile, "r")
-                                    if file then
-                                        local content = file.readAll()
-                                        file.close()
-                                        if content and #content > 100 then
-                                            downloadSuccess = true
-                                            break
-                                        end
-                                    end
-                                end
-                            end
-                            
-                            if attempt < 3 then
-                                sleep(2)
-                            end
-                        end
-                        
-                        if downloadSuccess then
-                            if fs.exists(finalFile) then
-                                fs.delete(finalFile)
-                            end
-                            
-                            fs.move(tempFile, finalFile)
-                            
-                            mainWin.setCursorPos(1, 3)
-                            mainWin.setTextColor(colors.lime)
-                            mainWin.write("Update successful! Rebooting...")
-                            sleep(2)
-                            
-                            os.reboot()
-                        else
-                            if fs.exists(tempFile) then
-                                fs.delete(tempFile)
-                            end
-                            
-                            mainWin.setCursorPos(1, 3)
-                            mainWin.setTextColor(colors.red)
-                            mainWin.write("Update failed! Check connection.")
-                            sleep(3)
-                            drawUI()
-                        end
-                    elseif y == 15 then 
-                        running = false 
                     end
+                elseif y == 9 then 
+                    running = false 
                 end
             end
         end
@@ -670,25 +428,15 @@ end
 -- 6. ENTRY POINT - С АВТОПЕРЕЗАПУСКОМ
 local function safeStartup()
     while true do
+        -- Загрузка настроек вне pcall, чтобы если они сломаны - всё равно перезапускалось
         loadSettings()
         term.setBackgroundColor(colors.black)
         term.clear()
         
-        -- Добавляем задержку если настроено
-        if settings.startupDelay > 0 then
-            sleep(settings.startupDelay)
-        end
-        
         -- Безопасная загрузочная анимация с автоперезапуском
-        if settings.animations then
-            safeBootAnim()
-        else
-            term.setCursorPos(math.floor(w/2)-2, math.floor(h/2))
-            term.setTextColor(colors.cyan)
-            term.write("ameOS")
-            sleep(1)
-        end
+        safeBootAnim()
         
+        -- Безопасный экран входа с автоперезапуском
         local loginComplete = false
         
         while not loginComplete do
@@ -736,15 +484,25 @@ local function safeStartup()
                 loginComplete = true
                 break
             end
+            -- Если произошла ошибка (Ctrl+T), просто продолжаем цикл - экран входа перезапустится
+            -- Никаких сообщений, никаких задержек
         end
         
+        -- Если дошли сюда, значит успешно вошли в систему
+        -- Запускаем основную ОС (она тоже будет в бесконечном цикле)
         local osSuccess, osError = pcall(osEngine)
         
+        -- Если ОС завершилась (например, через shutdown) или упала, перезапускаем всё
         if not osSuccess then
+            -- Если ОС упала с ошибкой, просто продолжаем внешний цикл - всё перезапустится
+            -- Можно добавить небольшую задержку, чтобы не зациклиться мгновенно
             sleep(0.1)
         elseif osError == "restart" then
+            -- Если ОС запросила перезагрузку
             sleep(0.1)
+            -- continue loop
         else
+            -- Нормальное завершение
             break
         end
     end
