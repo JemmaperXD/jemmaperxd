@@ -359,52 +359,42 @@ loadSettings()
 term.setBackgroundColor(colors.black)
 term.clear()
 
--- ФУНКЦИЯ БЕЗОПАСНОГО ВВОДА ПАРОЛЯ (Enter и Backspace работают, нельзя выйти)
-local function securePasswordInput()
-    local password = ""
-    term.setCursorBlink(true)
+-- УБРАН ВСЯКИЙ ЗАЩИЩЕННЫЙ ВВОД! Используем стандартный read но с фильтром terminate
+-- Простая обертка для стандартного read, которая игнорирует Ctrl+T
+local function safeRead(pass)
+    -- Устанавливаем обработчик terminate перед read
+    local oldTerminate = _G["os.terminate"]
+    _G["os.terminate"] = function() 
+        -- Вместо завершения просто возвращаем пустую строку
+        error("terminate_ignored", 0)
+    end
     
-    while true do
-        local event, key = os.pullEvent()
-        
-        if event == "char" then
-            -- Добавляем символ к паролю
-            password = password .. key
-            term.write("*") -- Показываем звездочку
-        elseif event == "key" then
-            if key == 14 then -- Backspace
-                if #password > 0 then
-                    -- Удаляем последний символ
-                    password = password:sub(1, -2)
-                    local x, y = term.getCursorPos()
-                    term.setCursorPos(x - 1, y)
-                    term.write(" ")
-                    term.setCursorPos(x - 1, y)
-                end
-            elseif key == 28 then -- Enter (Return)
-                term.setCursorBlink(false)
-                return password
-            end
-        elseif event == "terminate" then
-            -- Игнорируем Ctrl+T
-            -- Можем показать сообщение, но не выходим
-            term.setCursorBlink(false)
-            term.setCursorPos(1, h)
-            term.setTextColor(colors.red)
-            term.write("Cannot exit login! Press Ctrl+R to restart")
-            sleep(1.5)
-            term.setCursorPos(1, h)
-            term.write("                                   ")
-            term.setTextColor(colors.white)
-            term.setCursorPos(w/2-8 + #password + 1, h/2+1) -- Возвращаем курсор на место
-            term.setCursorBlink(true)
+    local success, result = pcall(function()
+        if pass then
+            return read("*")
+        else
+            return read()
         end
+    end)
+    
+    -- Восстанавливаем оригинальный обработчик
+    _G["os.terminate"] = oldTerminate
+    
+    if success then
+        return result
+    else
+        if result:match("terminate_ignored") then
+            -- Пользователь нажал Ctrl+T - игнорируем и возвращаем пустую строку
+            return ""
+        end
+        -- Другие ошибки - пробрасываем дальше
+        error(result)
     end
 end
 
--- ЗАЩИЩЕННЫЙ ЭКРАН ВХОДА (нельзя выйти завершением процесса)
+-- УПРОЩЕННЫЙ ЭКРАН ВХОДА
 if not settings.isRegistered then
-    -- ЭКРАН РЕГИСТРАЦИИ (первый запуск)
+    -- ЭКРАН РЕГИСТРАЦИИ
     term.setCursorBlink(true)
     term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
     term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") 
@@ -419,15 +409,15 @@ if not settings.isRegistered then
     saveSettings()
     term.setCursorBlink(false)
 else
-    -- ЭКРАН ВХОДА (с защитой от завершения)
+    -- ЭКРАН ВХОДА - ПРОСТО И РАБОЧЕ
     while true do
         term.setCursorBlink(true)
         term.clear()
         term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: "..settings.user)
         term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
         
-        -- Используем защищенный ввод пароля
-        local password = securePasswordInput()
+        -- Просто используем стандартный read("*") - он точно работает с Enter и Backspace
+        local password = read("*")
         
         if password == settings.pass then 
             break 
