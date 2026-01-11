@@ -1,4 +1,4 @@
--- ameOs v64.0 [FIXED: ALIGNMENT, PATH, UPDATE BUTTON]
+-- ameOs v66.0 [BOOT ANIM, UPDATE, PATH & RENAME FIX]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -41,14 +41,45 @@ local function loadSettings()
     end
 end
 
--- 2. ОТРИСОВКА И ЦЕНТРОВКА
+-- 2. АНИМАЦИЯ ЗАГРУЗКИ (FUSION)
+local function bootAnim()
+    local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
+    local duration = 4
+    local start = os.clock()
+    local angle = 0
+    while os.clock() - start < duration do
+        local elapsed = os.clock() - start
+        term.setBackgroundColor(colors.black)
+        term.clear()
+        local fusion = 1.0
+        if elapsed > (duration - 1) then fusion = math.max(0, 1 - (elapsed - (duration - 1))) end
+        term.setTextColor(colors.cyan)
+        local rX, rY = 2.5 * fusion, 1.5 * fusion
+        for i = 1, 3 do
+            local a = angle + (i * 2.1)
+            term.setCursorPos(cx + math.floor(math.cos(a)*rX+0.5), cy + math.floor(math.sin(a)*rY+0.5))
+            term.write("o")
+        end
+        term.setCursorPos(cx - 2, cy + 3)
+        term.setTextColor(colors.white)
+        term.write("ameOS")
+        angle = angle + 0.4
+        sleep(0.05)
+    end
+end
+
+-- 3. ОТРИСОВКА
 local function drawTopBar()
     local theme = themes[settings.themeIndex]
     local old = term.redirect(topWin)
     topWin.setBackgroundColor(theme.accent)
     topWin.setTextColor(theme.text)
     topWin.clear()
-    topWin.setCursorPos(2, 1) topWin.write("ameOs | " .. activeTab)
+    topWin.setCursorPos(2, 1)
+    -- ПУТЬ ТЕПЕРЬ ТУТ (Железно не пропадёт)
+    local title = "ameOs | " .. activeTab
+    if activeTab == "FILE" then title = title .. ": " .. currentPath end
+    topWin.write(title:sub(1, w - 8))
     topWin.setCursorPos(w - 6, 1)
     topWin.write(textutils.formatTime(os.time(), true))
     term.redirect(old)
@@ -57,7 +88,6 @@ end
 local function drawUI()
     local theme = themes[settings.themeIndex]
     term.setCursorBlink(false)
-    
     taskWin.setBackgroundColor(colors.black)
     taskWin.clear()
     local tabs = { {n="HOME", x=1}, {n="FILE", x=8}, {n="SHLL", x=15}, {n="CONF", x=22} }
@@ -68,7 +98,6 @@ local function drawUI()
         taskWin.write(" "..t.n.." ")
     end
     drawTopBar()
-    
     mainWin.setBackgroundColor(theme.bg)
     mainWin.setTextColor(theme.text)
     mainWin.clear()
@@ -86,17 +115,13 @@ local function drawUI()
             mainWin.write(n:sub(1, 8))
         end
     elseif activeTab == "FILE" then
-        mainWin.setCursorPos(1, 1)
-        mainWin.setTextColor(colors.yellow)
-        mainWin.write(" " .. currentPath)
-        
         local files = fs.list(currentPath)
         if currentPath ~= "/" then table.insert(files, 1, "..") end
         for i, n in ipairs(files) do
-            if i > (h-5) then break end
-            mainWin.setCursorPos(1, i + 2) 
+            if i > (h-3) then break end
+            mainWin.setCursorPos(1, i) 
             mainWin.setTextColor(fs.isDir(fs.combine(currentPath, n)) and colors.cyan or colors.white)
-            mainWin.write("> "..n)
+            mainWin.write("> " .. n)
         end
     elseif activeTab == "CONF" then
         mainWin.setCursorPos(2, 2) mainWin.write("Theme: "..theme.name)
@@ -119,19 +144,17 @@ local function drawUI()
     end
 end
 
--- 3. ДВИЖОК
+-- 4. ДВИЖОК
 local function osEngine()
     drawUI()
     while running do
         if not globalTimer then globalTimer = os.startTimer(1) end
         local ev, p1, p2, p3 = os.pullEvent()
-        
         if ev == "timer" and p1 == globalTimer then
             drawTopBar()
             globalTimer = os.startTimer(1)
         elseif ev == "mouse_click" then
             local btn, x, y = p1, p2, p3
-            
             if contextMenu then
                 local mw, mh = 12, #contextMenu.options
                 if x >= contextMenu.x and x < contextMenu.x + mw and y >= contextMenu.y and y < contextMenu.y + mh then
@@ -139,50 +162,42 @@ local function osEngine()
                     local file = contextMenu.file
                     local path = (activeTab == "HOME") and getHomeDir() or currentPath
                     contextMenu = nil
-                    
                     if choice == "New File" or choice == "New Folder" or choice == "Rename" then
                         drawUI()
-                        term.setCursorPos(1, h) term.setBackgroundColor(colors.black) term.setTextColor(colors.white)
-                        term.clearLine() term.write("Name: ")
-                        term.setCursorBlink(true)
-                        local n = read()
-                        term.setCursorBlink(false)
+                        term.setCursorPos(1, h) term.setBackgroundColor(colors.black) term.clearLine()
+                        term.write("Name: ") term.setCursorBlink(true)
+                        local n = read() term.setCursorBlink(false)
                         if n and n ~= "" then
-                            local targetPath = fs.combine(path, n)
-                            if not fs.exists(targetPath) then
-                                if choice == "New File" then fs.open(targetPath, "w").close()
-                                elseif choice == "New Folder" then fs.makeDir(targetPath)
-                                elseif choice == "Rename" then fs.move(fs.combine(path, file), targetPath) end
+                            local target = fs.combine(path, n)
+                            if not fs.exists(target) then
+                                if choice == "New File" then fs.open(target, "w").close()
+                                elseif choice == "New Folder" then fs.makeDir(target)
+                                elseif choice == "Rename" then fs.move(fs.combine(path, file), target) end
                             end
                         end
                     elseif choice == "Delete" then fs.delete(fs.combine(path, file))
                     elseif choice == "Copy" then clipboard.path = fs.combine(path, file)
                     elseif choice == "Paste" and clipboard.path then 
-                        local pTarget = fs.combine(path, fs.getName(clipboard.path))
-                        if not fs.exists(pTarget) then fs.copy(clipboard.path, pTarget) end
+                        local target = fs.combine(path, fs.getName(clipboard.path))
+                        if not fs.exists(target) then fs.copy(clipboard.path, target) end
                     end
                     drawUI()
-                else
-                    contextMenu = nil
-                    drawUI()
-                end
+                else contextMenu = nil drawUI() end
             elseif y == h then
                 if x >= 1 and x <= 6 then activeTab = "HOME"
                 elseif x >= 8 and x <= 13 then activeTab = "FILE"
                 elseif x >= 15 and x <= 20 then activeTab = "SHLL"
                 elseif x >= 22 and x <= 27 then activeTab = "CONF" end
-                
                 if activeTab == "SHLL" then
                     mainWin.clear() term.redirect(mainWin)
-                    shell.run("shell")
-                    term.redirect(term.native())
+                    shell.run("shell") term.redirect(term.native())
                     activeTab = "HOME"
                 end
                 drawUI()
-            elseif activeTab == "FILE" and y > 2 and y < h then
+            elseif activeTab == "FILE" and y > 1 and y < h then
                 local files = fs.list(currentPath)
                 if currentPath ~= "/" then table.insert(files, 1, "..") end
-                local sel = files[y - 3]
+                local sel = files[y - 1]
                 if btn == 2 then
                     contextMenu = { x=x, y=y, options = (sel and sel ~= "..") and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}, file = sel }
                     drawUI()
@@ -204,9 +219,7 @@ local function osEngine()
                 if btn == 2 then
                     contextMenu = { x=x, y=y, options = sel and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}, file = sel }
                     drawUI()
-                elseif sel then 
-                    activeTab = "FILE" currentPath = fs.combine(home, sel) drawUI()
-                end
+                elseif sel then activeTab = "FILE" currentPath = fs.combine(home, sel) drawUI() end
             elseif activeTab == "CONF" then
                 if y == 5 then settings.themeIndex = (settings.themeIndex % #themes) + 1 saveSettings() drawUI()
                 elseif y == 7 then 
@@ -221,31 +234,32 @@ local function osEngine()
     end
 end
 
--- 4. ВХОД И ЦЕНТРИРОВАНИЕ
+-- 5. ЗАПУСК
 loadSettings()
+bootAnim()
 term.setBackgroundColor(colors.black)
 term.clear()
 
-local function drawAuth(title)
+local function authUI(title)
     term.clear()
     term.setTextColor(colors.cyan)
-    term.setCursorPos(math.floor(w/2 - #title/2), h/2 - 2)
+    term.setCursorPos(math.floor(w/2 - #title/2), h/2 - 1)
     print(title)
     term.setTextColor(colors.white)
 end
 
 if not settings.isRegistered then
-    drawAuth("REGISTRATION")
-    term.setCursorPos(math.floor(w/2 - 8), h/2) write("User: ") settings.user = read()
-    term.setCursorPos(math.floor(w/2 - 8), h/2 + 1) write("Pass: ") settings.pass = read("*")
+    authUI("REGISTRATION")
+    term.setCursorPos(math.floor(w/2 - 8), h/2 + 1) write("User: ") settings.user = read()
+    term.setCursorPos(math.floor(w/2 - 8), h/2 + 2) write("Pass: ") settings.pass = read("*")
     settings.isRegistered = true saveSettings()
 else
-    local locked = true
-    while locked do
-        drawAuth("LOGIN: " .. settings.user)
+    local auth = false
+    while not auth do
+        authUI("LOGIN: " .. settings.user)
         term.setCursorPos(math.floor(w/2 - 8), h/2 + 1) write("Pass: ")
-        if read("*") == settings.pass then locked = false else
-            term.setCursorPos(math.floor(w/2 - 5), h/2 + 3) term.setTextColor(colors.red) print("WRONG!") sleep(1)
+        if read("*") == settings.pass then auth = true else
+            term.setCursorPos(math.floor(w/2 - 3), h/2 + 3) term.setTextColor(colors.red) print("FAIL") sleep(0.5)
         end
     end
 end
