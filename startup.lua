@@ -36,7 +36,6 @@ local function loadSettings()
         local decoded = textutils.unserialize(data or "")
         if type(decoded) == "table" then 
             settings = decoded 
-            -- Проверка корректности themeIndex после загрузки
             if settings.themeIndex > #themes then
                 settings.themeIndex = 1
             end
@@ -44,7 +43,6 @@ local function loadSettings()
     end
 end
 
--- Функция для получения уникального имени файла
 local function getUniquePath(dir, name)
     local path = fs.combine(dir, name)
     if not fs.exists(path) then return path end
@@ -65,14 +63,11 @@ local function getUniquePath(dir, name)
     return path
 end
 
--- Функция для нормализации пути (исправление проблемы с пропадающим /)
 local function normalizePath(path)
     if path == "" or path == nil then
         return "/"
     end
-    -- Удаляем возможные двойные слэши
     path = path:gsub("//+", "/")
-    -- Убеждаемся, что путь начинается с /
     if path:sub(1, 1) ~= "/" then
         path = "/" .. path
     end
@@ -144,7 +139,6 @@ local function drawUI()
         for i, n in ipairs(files) do
             local col, row = ((i-1)%4)*12+3, math.floor((i-1)/4)*4+1
             mainWin.setCursorPos(col, row)
-            -- Изменено: файлы синие, папки желтые
             mainWin.setTextColor(fs.isDir(fs.combine(home, n)) and colors.yellow or colors.blue)
             mainWin.write("[#]")
             mainWin.setCursorPos(col-1, row+1)
@@ -172,7 +166,7 @@ local function drawUI()
     end
 end
 
--- 4. CONTEXT MENU (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+-- 4. CONTEXT MENU
 local function showContext(mx, my, file)
     local opts = file and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}
     local menuWin = window.create(term.current(), mx, my, 12, #opts)
@@ -194,7 +188,6 @@ local function showContext(mx, my, file)
                 globalTimer = os.startTimer(1)
             end
             if p1 == contextTimer then
-                -- Обновляем верхнюю панель даже в контекстном меню
                 drawTopBar()
                 contextTimer = os.startTimer(1)
             end
@@ -237,13 +230,11 @@ local function showContext(mx, my, file)
                 end
                 contextRunning = false
             else
-                -- Клик вне меню - закрываем меню
                 contextRunning = false
             end
         end
     end
     
-    -- Отменяем локальный таймер контекстного меню
     if contextTimer then
         os.cancelTimer(contextTimer)
     end
@@ -290,7 +281,6 @@ local function osEngine()
                     term.setCursorBlink(false) term.redirect(old)
                     activeTab = "HOME"
                 end
-                -- КРИТИЧЕСКИЙ ФИКС: Перезапуск таймера после любой смены вкладки
                 os.cancelTimer(globalTimer)
                 globalTimer = os.startTimer(0.1)
                 drawUI()
@@ -303,7 +293,6 @@ local function osEngine()
                 elseif sel then
                     local p = fs.combine(currentPath, sel)
                     if fs.isDir(p) then 
-                        -- Используем normalizePath для корректного пути
                         currentPath = normalizePath(p)
                         drawUI()
                     else 
@@ -356,53 +345,81 @@ end
 -- 6. ENTRY POINT
 bootAnim()
 loadSettings()
-term.setBackgroundColor(colors.black)
-term.clear()
 
--- ПРОСТОЙ ЭКРАН ВХОДА КОТОРЫЙ РАБОТАЕТ
-if not settings.isRegistered then
-    -- ЭКРАН РЕГИСТРАЦИИ
-    term.setCursorBlink(true)
-    term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
-    term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") 
-    
-    -- Для регистрации используем стандартный read
-    settings.user = read()
-    
-    term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") 
-    -- Пароль тоже стандартный read
-    settings.pass = read("*")
-    
-    settings.isRegistered = true 
-    saveSettings()
-    term.setCursorBlink(false)
-else
-    -- ЭКРАН ВХОДА
-    -- ПРОСТО ИСПОЛЬЗУЕМ os.pullEvent БЕЗ ВСЯКИХ ОБЕРТОК
-    local loginAttempts = 0
-    
-    while true do
-        term.setCursorBlink(true)
-        term.clear()
-        term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: "..settings.user)
-        term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
+-- ФУНКЦИЯ ДЛЯ АВТОМАТИЧЕСКОГО ПЕРЕЗАПУСКА ЭКРАНА ВХОДА
+local function autoRestartLoginScreen()
+    while true do  -- Бесконечный цикл перезапуска
+        local success, errorMsg = pcall(function()
+            -- ЗАПУСКАЕМ ЭКРАН ВХОДА В ИЗОЛИРОВАННОМ ОКРУЖЕНИИ
+            term.setBackgroundColor(colors.black)
+            term.clear()
+            
+            if not settings.isRegistered then
+                -- ЭКРАН РЕГИСТРАЦИИ
+                term.setCursorBlink(true)
+                term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
+                term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") 
+                
+                settings.user = read()
+                
+                term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") 
+                settings.pass = read("*")
+                
+                settings.isRegistered = true 
+                saveSettings()
+                term.setCursorBlink(false)
+                
+                -- Выходим из функции перезапуска после успешной регистрации
+                return "registered"
+            else
+                -- ЭКРАН ВХОДА
+                local loginAttempts = 0
+                
+                while true do
+                    term.setCursorBlink(true)
+                    term.clear()
+                    term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: "..settings.user)
+                    term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
+                    
+                    local password = read("*")
+                    
+                    if password == settings.pass then 
+                        term.setCursorBlink(false)
+                        -- Выходим из функции перезапуска после успешного входа
+                        return "login_success"
+                    else
+                        loginAttempts = loginAttempts + 1
+                        term.setCursorPos(w/2-8, h/2+3)
+                        term.setTextColor(colors.red)
+                        term.write("Wrong password! Try: " .. loginAttempts)
+                        sleep(1.5)
+                    end
+                end
+            end
+        end)
         
-        -- ПРОСТО ЧИТАЕМ ПАРОЛЬ С ПОМОЩЬЮ read
-        local password = read("*")
-        
-        if password == settings.pass then 
-            break 
+        -- Проверяем результат выполнения
+        if success then
+            if errorMsg == "registered" or errorMsg == "login_success" then
+                -- Успешная регистрация или вход - выходим из цикла перезапуска
+                break
+            end
         else
-            -- Неправильный пароль
-            loginAttempts = loginAttempts + 1
-            term.setCursorPos(w/2-5, h/2+3)
+            -- Если произошла ошибка (например, Ctrl+T), просто перезапускаем
+            sleep(0.5)  -- Небольшая задержка перед перезапуском
+            -- Очищаем экран и продолжаем цикл
+            term.setBackgroundColor(colors.black)
+            term.clear()
+            term.setCursorPos(w/2-10, h/2)
             term.setTextColor(colors.red)
-            term.write("Wrong password! Try: " .. loginAttempts)
-            sleep(1.5)
+            term.write("Restarting login screen...")
+            sleep(1)
         end
     end
-    term.setCursorBlink(false)
 end
 
--- Запускаем основную систему
+-- ЗАПУСКАЕМ ЭКРАН ВХОДА С АВТОПЕРЕЗАПУСКОМ
+autoRestartLoginScreen()
+
+-- ЗАПУСКАЕМ ОСНОВНУЮ СИСТЕМУ
 osEngine()
