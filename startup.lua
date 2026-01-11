@@ -1,4 +1,4 @@
--- ameOs v62.0 [STABLE: RENAME & PATH FIX]
+-- ameOs v64.0 [FIXED: ALIGNMENT, PATH, UPDATE BUTTON]
 local w, h = term.getSize()
 local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
 local running = true
@@ -41,7 +41,7 @@ local function loadSettings()
     end
 end
 
--- 2. ОТРИСОВКА
+-- 2. ОТРИСОВКА И ЦЕНТРОВКА
 local function drawTopBar()
     local theme = themes[settings.themeIndex]
     local old = term.redirect(topWin)
@@ -86,24 +86,25 @@ local function drawUI()
             mainWin.write(n:sub(1, 8))
         end
     elseif activeTab == "FILE" then
-        -- ФИКС: Путь на первой строке
         mainWin.setCursorPos(1, 1)
         mainWin.setTextColor(colors.yellow)
-        mainWin.write(" "..currentPath)
+        mainWin.write(" " .. currentPath)
         
-        -- ФИКС: Список со второй строки
         local files = fs.list(currentPath)
         if currentPath ~= "/" then table.insert(files, 1, "..") end
         for i, n in ipairs(files) do
-            if i > (h-4) then break end
-            mainWin.setCursorPos(1, i + 1) 
+            if i > (h-5) then break end
+            mainWin.setCursorPos(1, i + 2) 
             mainWin.setTextColor(fs.isDir(fs.combine(currentPath, n)) and colors.cyan or colors.white)
             mainWin.write("> "..n)
         end
     elseif activeTab == "CONF" then
         mainWin.setCursorPos(2, 2) mainWin.write("Theme: "..theme.name)
         mainWin.setCursorPos(2, 4) mainWin.write("[ NEXT THEME ]")
-        mainWin.setCursorPos(2, 6) mainWin.write("[ SHUTDOWN ]")
+        mainWin.setCursorPos(2, 6) mainWin.setTextColor(colors.yellow)
+        mainWin.write("[ UPDATE SYSTEM ]")
+        mainWin.setCursorPos(2, 8) mainWin.setTextColor(theme.text)
+        mainWin.write("[ SHUTDOWN ]")
     end
 
     if contextMenu then
@@ -148,7 +149,6 @@ local function osEngine()
                         term.setCursorBlink(false)
                         if n and n ~= "" then
                             local targetPath = fs.combine(path, n)
-                            -- ФИКС: Проверка на существование файла перед переименованием/созданием
                             if not fs.exists(targetPath) then
                                 if choice == "New File" then fs.open(targetPath, "w").close()
                                 elseif choice == "New Folder" then fs.makeDir(targetPath)
@@ -182,7 +182,7 @@ local function osEngine()
             elseif activeTab == "FILE" and y > 2 and y < h then
                 local files = fs.list(currentPath)
                 if currentPath ~= "/" then table.insert(files, 1, "..") end
-                local sel = files[y - 2]
+                local sel = files[y - 3]
                 if btn == 2 then
                     contextMenu = { x=x, y=y, options = (sel and sel ~= "..") and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}, file = sel }
                     drawUI()
@@ -209,24 +209,45 @@ local function osEngine()
                 end
             elseif activeTab == "CONF" then
                 if y == 5 then settings.themeIndex = (settings.themeIndex % #themes) + 1 saveSettings() drawUI()
-                elseif y == 6 then running = false end
+                elseif y == 7 then 
+                    term.setBackgroundColor(colors.black) term.clear()
+                    term.setCursorPos(w/2-6, h/2) print("Updating...")
+                    fs.delete("startup.lua")
+                    shell.run("wget https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua startup.lua")
+                    os.reboot()
+                elseif y == 9 then running = false end
             end
         end
     end
 end
 
--- 4. СТАРТ
+-- 4. ВХОД И ЦЕНТРИРОВАНИЕ
 loadSettings()
+term.setBackgroundColor(colors.black)
 term.clear()
+
+local function drawAuth(title)
+    term.clear()
+    term.setTextColor(colors.cyan)
+    term.setCursorPos(math.floor(w/2 - #title/2), h/2 - 2)
+    print(title)
+    term.setTextColor(colors.white)
+end
+
 if not settings.isRegistered then
-    term.setCursorPos(2, 2) print("Registration")
-    term.setCursorPos(2, 4) write("User: ") settings.user = read()
-    term.setCursorPos(2, 5) write("Pass: ") settings.pass = read("*")
+    drawAuth("REGISTRATION")
+    term.setCursorPos(math.floor(w/2 - 8), h/2) write("User: ") settings.user = read()
+    term.setCursorPos(math.floor(w/2 - 8), h/2 + 1) write("Pass: ") settings.pass = read("*")
     settings.isRegistered = true saveSettings()
 else
-    term.setCursorPos(2, 2) print("Login: "..settings.user)
-    term.setCursorPos(2, 4) write("Pass: ")
-    while read("*") ~= settings.pass do term.setCursorPos(2, 4) term.clearLine() write("Wrong! Pass: ") end
+    local locked = true
+    while locked do
+        drawAuth("LOGIN: " .. settings.user)
+        term.setCursorPos(math.floor(w/2 - 8), h/2 + 1) write("Pass: ")
+        if read("*") == settings.pass then locked = false else
+            term.setCursorPos(math.floor(w/2 - 5), h/2 + 3) term.setTextColor(colors.red) print("WRONG!") sleep(1)
+        end
+    end
 end
 
 osEngine()
