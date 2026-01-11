@@ -74,30 +74,41 @@ local function normalizePath(path)
     return path
 end
 
--- 2. BOOT ANIMATION
-local function bootAnim()
-    local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
-    local duration = 5
-    local start = os.clock()
-    local angle = 0
-    while os.clock() - start < duration do
-        local elapsed = os.clock() - start
-        term.setBackgroundColor(colors.black)
-        term.clear()
-        local fusion = 1.0
-        if elapsed > (duration - 2) then fusion = math.max(0, 1 - (elapsed - (duration - 2)) / 2) end
-        term.setTextColor(colors.cyan)
-        local rX, rY = 2.5 * fusion, 1.5 * fusion
-        for i = 1, 3 do
-            local a = angle + (i * 2.1)
-            term.setCursorPos(cx + math.floor(math.cos(a)*rX+0.5), cy + math.floor(math.sin(a)*rY+0.5))
-            term.write("o")
+-- 2. БЕЗОПАСНАЯ БУТ АНИМАЦИЯ (с автоперезапуском)
+local function safeBootAnim()
+    while true do
+        local success, error = pcall(function()
+            local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
+            local duration = 5
+            local start = os.clock()
+            local angle = 0
+            while os.clock() - start < duration do
+                local elapsed = os.clock() - start
+                term.setBackgroundColor(colors.black)
+                term.clear()
+                local fusion = 1.0
+                if elapsed > (duration - 2) then fusion = math.max(0, 1 - (elapsed - (duration - 2)) / 2) end
+                term.setTextColor(colors.cyan)
+                local rX, rY = 2.5 * fusion, 1.5 * fusion
+                for i = 1, 3 do
+                    local a = angle + (i * 2.1)
+                    term.setCursorPos(cx + math.floor(math.cos(a)*rX+0.5), cy + math.floor(math.sin(a)*rY+0.5))
+                    term.write("o")
+                end
+                term.setCursorPos(cx - 2, h - 1)
+                term.setTextColor(colors.white)
+                term.write("ameOS")
+                angle = angle + 0.4
+                sleep(0.05)
+            end
+            return true -- Успешное завершение
+        end)
+        
+        if success then
+            break -- Анимация завершена успешно
         end
-        term.setCursorPos(cx - 2, h - 1)
-        term.setTextColor(colors.white)
-        term.write("ameOS")
-        angle = angle + 0.4
-        sleep(0.05)
+        -- Если произошла ошибка (Ctrl+T), просто продолжаем цикл - анимация начнется заново
+        -- Никаких сообщений, просто мгновенный перезапуск
     end
 end
 
@@ -342,84 +353,88 @@ local function osEngine()
     end
 end
 
--- 6. ENTRY POINT
-bootAnim()
-loadSettings()
-
--- ФУНКЦИЯ ДЛЯ АВТОМАТИЧЕСКОГО ПЕРЕЗАПУСКА ЭКРАНА ВХОДА
-local function autoRestartLoginScreen()
-    while true do  -- Бесконечный цикл перезапуска
-        local success, errorMsg = pcall(function()
-            -- ЗАПУСКАЕМ ЭКРАН ВХОДА В ИЗОЛИРОВАННОМ ОКРУЖЕНИИ
-            term.setBackgroundColor(colors.black)
-            term.clear()
-            
-            if not settings.isRegistered then
-                -- ЭКРАН РЕГИСТРАЦИИ
-                term.setCursorBlink(true)
-                term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
-                term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") 
-                
-                settings.user = read()
-                
-                term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") 
-                settings.pass = read("*")
-                
-                settings.isRegistered = true 
-                saveSettings()
-                term.setCursorBlink(false)
-                
-                -- Выходим из функции перезапуска после успешной регистрации
-                return "registered"
-            else
-                -- ЭКРАН ВХОДА
-                local loginAttempts = 0
-                
-                while true do
+-- 6. ENTRY POINT - С АВТОПЕРЕЗАПУСКОМ
+local function safeStartup()
+    while true do
+        -- Загрузка настроек вне pcall, чтобы если они сломаны - всё равно перезапускалось
+        loadSettings()
+        term.setBackgroundColor(colors.black)
+        term.clear()
+        
+        -- Безопасная загрузочная анимация с автоперезапуском
+        safeBootAnim()
+        
+        -- Безопасный экран входа с автоперезапуском
+        local loginComplete = false
+        
+        while not loginComplete do
+            local success, result = pcall(function()
+                if not settings.isRegistered then
                     term.setCursorBlink(true)
-                    term.clear()
-                    term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: "..settings.user)
-                    term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
+                    term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
+                    term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") 
                     
-                    local password = read("*")
+                    settings.user = read()
                     
-                    if password == settings.pass then 
-                        term.setCursorBlink(false)
-                        -- Выходим из функции перезапуска после успешного входа
-                        return "login_success"
-                    else
-                        loginAttempts = loginAttempts + 1
-                        term.setCursorPos(w/2-8, h/2+3)
-                        term.setTextColor(colors.red)
-                        term.write("Wrong password! Try: " .. loginAttempts)
-                        sleep(1.5)
+                    term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") 
+                    settings.pass = read("*")
+                    
+                    settings.isRegistered = true 
+                    saveSettings()
+                    term.setCursorBlink(false)
+                    return "registered"
+                else
+                    local loginAttempts = 0
+                    
+                    while true do
+                        term.setCursorBlink(true)
+                        term.clear()
+                        term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: "..settings.user)
+                        term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
+                        
+                        local password = read("*")
+                        
+                        if password == settings.pass then 
+                            term.setCursorBlink(false)
+                            return "login_success"
+                        else
+                            loginAttempts = loginAttempts + 1
+                            term.setCursorPos(w/2-8, h/2+3)
+                            term.setTextColor(colors.red)
+                            term.write("Wrong password! Try: " .. loginAttempts)
+                            sleep(1.5)
+                        end
                     end
                 end
-            end
-        end)
-        
-        -- Проверяем результат выполнения
-        if success then
-            if errorMsg == "registered" or errorMsg == "login_success" then
-                -- Успешная регистрация или вход - выходим из цикла перезапуска
+            end)
+            
+            if success and (result == "registered" or result == "login_success") then
+                loginComplete = true
                 break
             end
+            -- Если произошла ошибка (Ctrl+T), просто продолжаем цикл - экран входа перезапустится
+            -- Никаких сообщений, никаких задержек
+        end
+        
+        -- Если дошли сюда, значит успешно вошли в систему
+        -- Запускаем основную ОС (она тоже будет в бесконечном цикле)
+        local osSuccess, osError = pcall(osEngine)
+        
+        -- Если ОС завершилась (например, через shutdown) или упала, перезапускаем всё
+        if not osSuccess then
+            -- Если ОС упала с ошибкой, просто продолжаем внешний цикл - всё перезапустится
+            -- Можно добавить небольшую задержку, чтобы не зациклиться мгновенно
+            sleep(0.1)
+        elseif osError == "restart" then
+            -- Если ОС запросила перезагрузку
+            sleep(0.1)
+            -- continue loop
         else
-            -- Если произошла ошибка (например, Ctrl+T), просто перезапускаем
-            sleep(0.5)  -- Небольшая задержка перед перезапуском
-            -- Очищаем экран и продолжаем цикл
-            term.setBackgroundColor(colors.black)
-            term.clear()
-            term.setCursorPos(w/2-10, h/2)
-            term.setTextColor(colors.red)
-            term.write("Restarting login screen...")
-            sleep(1)
+            -- Нормальное завершение
+            break
         end
     end
 end
 
--- ЗАПУСКАЕМ ЭКРАН ВХОДА С АВТОПЕРЕЗАПУСКОМ
-autoRestartLoginScreen()
-
--- ЗАПУСКАЕМ ОСНОВНУЮ СИСТЕМУ
-osEngine()
+-- ЗАПУСКАЕМ ВСЁ С ЗАЩИТОЙ
+safeStartup()
