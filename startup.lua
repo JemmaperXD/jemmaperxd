@@ -225,7 +225,7 @@ local function osEngine()
                 elseif y == 7 then 
                     mainWin.clear() mainWin.setCursorPos(1,1) print("Updating...")
                     if fs.exists("startup.lua") then fs.delete("startup.lua") end
-                    shell.run("wget https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua startup.lua")
+                    shell.run("wget https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/stable/startup.lua")
                     os.reboot()
                 elseif y == 9 then running = false end
             end
