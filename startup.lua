@@ -18,22 +18,37 @@ local mainWin = window.create(term.current(), 1, 2, w, h - 2)
 local taskWin = window.create(term.current(), 1, h, w, 1)
 
 -- 1. SYSTEM UTILS
-if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end
-local function getHomeDir() return fs.combine("/.User", "." .. settings.user) end
+if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end [cite: 2]
+local function getHomeDir() return fs.combine("/.User", "." .. settings.user) end [cite: 2]
 
 local function saveSettings()
-    local f = fs.open(SETTINGS_PATH, "w")
-    f.write(textutils.serialize(settings))
-    f.close()
+    local f = fs.open(SETTINGS_PATH, "w") [cite: 2]
+    f.write(textutils.serialize(settings)) [cite: 2]
+    f.close() [cite: 2]
 end
 
 local function loadSettings()
-    if fs.exists(SETTINGS_PATH) then
-        local f = fs.open(SETTINGS_PATH, "r")
-        local data = f.readAll() f.close()
-        local decoded = textutils.unserialize(data or "")
-        if type(decoded) == "table" then settings = decoded end
+    if fs.exists(SETTINGS_PATH) then [cite: 2]
+        local f = fs.open(SETTINGS_PATH, "r") [cite: 2]
+        local data = f.readAll() f.close() [cite: 2]
+        local decoded = textutils.unserialize(data or "") [cite: 2]
+        if type(decoded) == "table" then settings = decoded end [cite: 3]
     end
+end
+
+-- Функция для генерации уникального имени (защита от краша/перезаписи)
+local function getUniquePath(basePath, name)
+    local fullPath = fs.combine(basePath, name)
+    if not fs.exists(fullPath) then return fullPath end
+    
+    local namePart = name:match("(.+)%..+") or name
+    local extPart = name:match(".+(%.%w+)$") or ""
+    local counter = 1
+    
+    while fs.exists(fs.combine(basePath, namePart .. " (" .. counter .. ")" .. extPart)) do
+        counter = counter + 1
+    end
+    return fs.combine(basePath, namePart .. " (" .. counter .. ")" .. extPart)
 end
 
 -- 2. BOOT ANIMATION
