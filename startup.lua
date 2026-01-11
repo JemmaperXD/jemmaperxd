@@ -359,12 +359,49 @@ loadSettings()
 term.setBackgroundColor(colors.black)
 term.clear()
 
+-- Функция для безопасного ввода (нельзя выйти завершением процесса)
+local function safeRead(mask)
+    local input = ""
+    local cursorX, cursorY = term.getCursorPos()
+    
+    while true do
+        local event, key = os.pullEvent()
+        
+        if event == "char" then
+            input = input .. key
+            if mask then
+                term.write("*")
+            else
+                term.write(key)
+            end
+        elseif event == "key" then
+            if key == 14 then -- Backspace
+                if #input > 0 then
+                    input = input:sub(1, -2)
+                    local x, y = term.getCursorPos()
+                    term.setCursorPos(x - 1, y)
+                    term.write(" ")
+                    term.setCursorPos(x - 1, y)
+                end
+            elseif key == 28 then -- Enter
+                term.setCursorBlink(false)
+                return input
+            end
+        elseif event == "terminate" then
+            -- Игнорируем завершение процесса
+            os.queueEvent("fake_event")
+        end
+    end
+end
+
 -- Защищенный экран входа (нельзя выйти завершением процесса)
 if not settings.isRegistered then
-    -- Экрана регистрации
+    -- Экран регистрации
     term.setCursorBlink(true)
     term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
     term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") 
+    
+    -- Используем стандартный read для регистрации (один раз)
     settings.user = read()
     
     term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") 
@@ -374,48 +411,25 @@ if not settings.isRegistered then
     saveSettings()
     term.setCursorBlink(false)
 else
-    -- Экрана входа с защитой от завершения
+    -- Экран входа с защитой от завершения
     while true do
         term.setCursorBlink(true)
         term.clear()
         term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: "..settings.user)
         term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
         
-        -- Используем os.pullEventRaw для защиты от завершения
-        local password = ""
-        local inputActive = true
-        
-        while inputActive do
-            local event, param = os.pullEventRaw()
-            
-            if event == "char" then
-                password = password .. param
-                term.write("*")
-            elseif event == "key" and param == 14 then -- Backspace
-                if #password > 0 then
-                    password = password:sub(1, -2)
-                    local x, y = term.getCursorPos()
-                    term.setCursorPos(x-1, y)
-                    term.write(" ")
-                    term.setCursorPos(x-1, y)
-                end
-            elseif event == "key" and param == 28 then -- Enter
-                inputActive = false
-            -- Игнорируем событие terminate (Ctrl+T)
-            elseif event == "terminate" then
-                -- Ничего не делаем, просто игнорируем
-            end
-        end
+        -- Используем безопасный ввод для пароля
+        local password = safeRead(true)
         
         if password == settings.pass then 
             break 
         else
             -- Неправильный пароль
-            term.setCursorPos(w/2-5, h/2+2)
+            term.setCursorPos(w/2-5, h/2+3)
             term.setTextColor(colors.red)
             term.write("Wrong password!")
             sleep(1.5)
-            term.setCursorPos(w/2-5, h/2+2)
+            term.setCursorPos(w/2-5, h/2+3)
             term.write("                ")
         end
     end
