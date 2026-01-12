@@ -162,9 +162,17 @@ end
 
 local function findServer()
     local servers = rednet.lookup(PROTOCOL)
-    if servers and #servers > 0 then
-        serverId = servers[1]
-        return true
+    if servers then
+        if type(servers) == "table" then
+            if #servers > 0 then
+                serverId = servers[1]
+                return true
+            end
+        else
+            -- In some versions, rednet.lookup returns a single number
+            serverId = servers
+            return true
+        end
     end
     return false
 end
