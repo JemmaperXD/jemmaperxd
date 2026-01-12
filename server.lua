@@ -72,6 +72,7 @@ local function saveData()
     file.close()
     shouldSave = false
     lastSaveTime = os.time()
+    print("Data saved to " .. DATA_FILE)
 end
 
 -- Find modem
@@ -80,6 +81,7 @@ local function findModem()
         if peripheral.getType(modemSide) == "modem" then
             return true
         else
+            print("Error: No modem found on side: " .. modemSide)
             return false
         end
     end
@@ -91,6 +93,9 @@ local function findModem()
             return true
         end
     end
+    
+    print("Error: No wireless modem found!")
+    print("Attach a modem to any side of the computer.")
     return false
 end
 
@@ -122,6 +127,7 @@ end
 local function handleRegister(senderId, data)
     local valid, errorMsg = validateClient(senderId, data.clientName)
     if not valid then
+        print("Registration failed for " .. senderId .. ": " .. errorMsg)
         return {
             type = "register_error",
             message = errorMsg
@@ -134,6 +140,8 @@ local function handleRegister(senderId, data)
         connectedClients[senderId].name = data.clientName
         connectedClients[senderId].lastSeen = os.time()
         connectedClients[senderId].status = "online"
+        
+        print("Client reconnected: " .. data.clientName .. " (" .. senderId .. ")")
         
         return {
             type = "register_ack",
@@ -151,13 +159,17 @@ local function handleRegister(senderId, data)
     }
     
     -- Initialize for new clients
-    messages[senderId] = messages[senderId] or {
-        inbox = {},
-        outbox = {},
-        unread = 0
-    }
+    if not messages[senderId] then
+        messages[senderId] = {
+            inbox = {},
+            outbox = {},
+            unread = 0
+        }
+    end
     
     lastPing[senderId] = os.time()
+    
+    print("New client registered: " .. data.clientName .. " (" .. senderId .. ")")
     
     -- Notify all about new client
     for clientId, _ in pairs(connectedClients) do
@@ -187,6 +199,13 @@ local function handleSendMessage(senderId, data)
     end
     
     local recipientId = data.recipientId
+    if not recipientId then
+        return {
+            type = "error",
+            message = "No recipient specified"
+        }
+    end
+    
     if not connectedClients[recipientId] then
         return {
             type = "error", 
@@ -201,8 +220,17 @@ local function handleSendMessage(senderId, data)
         }
     end
     
+    -- Initialize message storage if needed
+    if not messages[senderId] then
+        messages[senderId] = {inbox = {}, outbox = {}, unread = 0}
+    end
+    
+    if not messages[recipientId] then
+        messages[recipientId] = {inbox = {}, outbox = {}, unread = 0}
+    end
+    
     local message = {
-        id = #(messages[recipientId].inbox or {}) + 1,
+        id = #messages[recipientId].inbox + 1,
         senderId = senderId,
         senderName = connectedClients[senderId].name,
         recipientId = recipientId,
@@ -217,6 +245,10 @@ local function handleSendMessage(senderId, data)
     -- Save to recipient's inbox
     table.insert(messages[recipientId].inbox, message)
     messages[recipientId].unread = (messages[recipientId].unread or 0) + 1
+    
+    print("Message from " .. connectedClients[senderId].name .. 
+          " to " .. connectedClients[recipientId].name .. 
+          ": " .. (data.text:sub(1, 20) .. (#data.text > 20 and "..." or "")))
     
     -- Send to recipient
     rednet.send(recipientId, {
@@ -256,11 +288,16 @@ local function handleGetMessages(senderId, data)
         }
     end
     
-    local clientMessages = messages[senderId] or {inbox = {}, outbox = {}}
-    local unread = data.unreadOnly
+    local clientMessages = messages[senderId]
+    if not clientMessages then
+        clientMessages = {inbox = {}, outbox = {}, unread = 0}
+        messages[senderId] = clientMessages
+    end
     
+    local unreadOnly = data.unreadOnly
     local result = {}
-    if unread then
+    
+    if unreadOnly then
         for _, msg in ipairs(clientMessages.inbox) do
             if not msg.read then
                 table.insert(result, msg)
@@ -285,6 +322,7 @@ local function handlePing(senderId, data)
     if connectedClients[senderId] then
         lastPing[senderId] = os.time()
         connectedClients[senderId].lastSeen = os.time()
+        connectedClients[senderId].status = "online"
     end
     
     return {
@@ -328,7 +366,10 @@ local function handleMessage(senderId, message, protocol)
     end
     
     if response then
-        rednet.send(senderId, response, PROTOCOL)
+        local success = rednet.send(senderId, response, PROTOCOL)
+        if not success then
+            print("Failed to send response to client " .. senderId)
+        end
     end
 end
 
@@ -349,6 +390,8 @@ local function cleanupClients()
             connectedClients[clientId] = nil
             lastPing[clientId] = nil
             
+            print("Client timed out: " .. clientName .. " (" .. clientId .. ")")
+            
             -- Notify about client disconnect
             for otherId, _ in pairs(connectedClients) do
                 rednet.send(otherId, {
@@ -357,8 +400,6 @@ local function cleanupClients()
                     clientName = clientName
                 }, PROTOCOL)
             end
-            
-            print("Client disconnected: " .. clientName)
         end
     end
 end
@@ -388,13 +429,19 @@ local function main()
     messages = loadedData.messages or {}
     connectedClients = loadedData.clients or {}
     
-    -- Restore lastPing
+    -- Restore lastPing and mark as offline initially
     for clientId, client in pairs(connectedClients) do
         lastPing[clientId] = client.lastSeen or os.time()
         client.status = "offline" -- Mark as offline until they ping
+        print("Loaded client: " .. (client.name or "Unknown") .. " (offline)")
     end
     
+    print("Server ready. Waiting for connections...")
+    
     -- Main event loop
+    local cleanupTimer = os.startTimer(10)
+    local saveTimer = os.startTimer(SAVE_INTERVAL)
+    
     while true do
         local event, param1, param2, param3 = os.pullEvent()
         
@@ -403,20 +450,22 @@ local function main()
             handleMessage(senderId, message, protocol)
             
         elseif event == "timer" then
-            cleanupClients()
+            local timerId = param1
             
-            -- Auto-save
-            if shouldSave and os.time() - lastSaveTime > SAVE_INTERVAL then
-                saveData()
-                print("Data saved")
+            if timerId == cleanupTimer then
+                cleanupClients()
+                cleanupTimer = os.startTimer(10)
+                
+            elseif timerId == saveTimer then
+                if shouldSave and os.time() - lastSaveTime > SAVE_INTERVAL then
+                    saveData()
+                end
+                saveTimer = os.startTimer(SAVE_INTERVAL)
             end
             
         elseif event == "key" and param1 == 20 then -- Ctrl+T
             break
         end
-        
-        -- Set timer for cleanup
-        os.startTimer(10)
     end
     
     -- Clean shutdown
