@@ -1,6 +1,6 @@
 -- Messenger Server for CC:Tweaked
-local VERSION = "1.0"
-local PORT = 7777
+local VERSION = "1.2"
+local PORT = 1384
 local MAX_CLIENTS = 20
 
 -- Parse command line arguments
@@ -20,33 +20,84 @@ for i = 1, #args do
         print("  -n, --name <name>    Set server display name")
         print("  -s, --side <side>    Specify modem side (left/right/top/bottom/back/front)")
         print("  -h, --help           Show this help message")
-        print("  -i, --id <id>        Specify custom server ID")
         return
-    elseif arg == "-i" or arg == "--id" then
-        local customId = tonumber(args[i + 1])
-        if customId then
-            -- In CC:Tweaked, we can't change computer ID, but we can use it as display
-            print("Note: Computer ID is fixed, using " .. customId .. " as display only")
+    end
+end
+
+-- Function to get username from /.User folder
+function getUsernameFromFolder()
+    local userFolderPath = "/.User"
+    
+    if fs.exists(userFolderPath) and fs.isDir(userFolderPath) then
+        -- List all items in /.User folder
+        local items = fs.list(userFolderPath)
+        
+        for _, item in ipairs(items) do
+            local itemPath = fs.combine(userFolderPath, item)
+            
+            -- Check if it's a directory and starts with "."
+            if fs.isDir(itemPath) and string.sub(item, 1, 1) == "." then
+                local username = string.sub(item, 2) -- Remove the leading dot
+                if username and username ~= "" then
+                    return username
+                end
+            end
         end
     end
+    
+    return nil
+end
+
+-- Ask for username if not found
+function askForUsername()
+    print("No username found in /.User folder")
+    print("Please enter your username:")
+    
+    local username = read()
+    
+    -- Validate username
+    while not username or username == "" or #username > 20 do
+        if not username or username == "" then
+            print("Username cannot be empty. Please enter username:")
+        elseif #username > 20 then
+            print("Username too long (max 20 characters). Please enter shorter name:")
+        end
+        username = read()
+    end
+    
+    -- Create /.User/.username folder
+    local userFolderPath = "/.User"
+    if not fs.exists(userFolderPath) then
+        fs.makeDir(userFolderPath)
+    end
+    
+    local userSpecificFolder = fs.combine(userFolderPath, "." .. username)
+    if not fs.exists(userSpecificFolder) then
+        fs.makeDir(userSpecificFolder)
+    end
+    
+    return username
+end
+
+-- Get or ask for username
+local DEFAULT_USERNAME = os.getComputerLabel() or "Server" .. os.getComputerID()
+local username = getUsernameFromFolder()
+
+if not username then
+    username = askForUsername()
 end
 
 -- Initialization
 print("=== Messenger Server v" .. VERSION .. " ===")
-print("Loading...")
+print("Server username: " .. username)
 
 -- Function to find wireless modem
 function findWirelessModem(specifiedSide)
-    print("Searching for wireless modem...")
-    
     if specifiedSide then
         -- Check specified side first
         local modem = peripheral.wrap(specifiedSide)
         if modem and modem.isWireless and modem.isWireless() then
-            print("Using specified modem on side: " .. specifiedSide)
             return specifiedSide
-        else
-            print("Warning: No wireless modem found on specified side: " .. specifiedSide)
         end
     end
     
@@ -59,14 +110,12 @@ function findWirelessModem(specifiedSide)
             -- Check if it's a wireless modem
             local modem = peripheral.wrap(side)
             if modem and modem.isWireless and modem.isWireless() then
-                print("Found wireless modem on side: " .. side)
                 return side
             end
         end
     end
     
     -- If not found, list available peripherals
-    print("No wireless modem found!")
     print("Available peripherals:")
     for _, side in ipairs(sides) do
         print("  " .. side .. " - " .. peripheral.getType(side))
@@ -77,13 +126,9 @@ function findWirelessModem(specifiedSide)
     local input = read()
     
     if input then
-        -- Check if this side has a modem
         local modem = peripheral.wrap(input)
         if modem and modem.isWireless and modem.isWireless() then
-            print("Using modem on side: " .. input)
             return input
-        else
-            print("Error: No wireless modem found on side: " .. input)
         end
     end
     
@@ -105,31 +150,34 @@ if not modem then
 end
 
 rednet.open(MODEM_SIDE)
-print("Modem opened successfully on side: " .. MODEM_SIDE)
 
 -- Set server name
-local SERVER_DISPLAY_NAME = serverName or os.getComputerLabel() or "Server" .. os.getComputerID()
-print("Server display name: " .. SERVER_DISPLAY_NAME)
-print("Server computer ID: " .. os.getComputerID())
+local SERVER_DISPLAY_NAME = serverName or username
 
 -- Data structures
-local clients = {}
+local clients = {} -- id -> {name, lastSeen, online, registered}
 local messages = {}
 local messageHistory = {}
+local messageIds = {}
+
+-- Generate unique message ID
+function generateMessageId()
+    return os.getComputerID() .. "_" .. os.epoch("utc") .. "_" .. math.random(1000, 9999)
+end
 
 -- Functions
 function saveData()
     local data = {
         clients = clients,
         messages = messages,
-        serverName = SERVER_DISPLAY_NAME
+        serverName = SERVER_DISPLAY_NAME,
+        messageHistory = messageHistory
     }
     
     local file = fs.open("server_data.dat", "w")
     if file then
         file.write(textutils.serialize(data))
         file.close()
-        print("Data saved")
     end
 end
 
@@ -144,48 +192,52 @@ function loadData()
                 clients = data.clients or clients
                 messages = data.messages or messages
                 SERVER_DISPLAY_NAME = data.serverName or SERVER_DISPLAY_NAME
-                print("Data loaded: " .. #messageHistory .. " messages, " .. countTable(clients) .. " clients")
-                print("Server name: " .. SERVER_DISPLAY_NAME)
+                messageHistory = data.messageHistory or messageHistory
             end
         end
     end
 end
 
-function countTable(tbl)
-    local count = 0
-    for _ in pairs(tbl) do
-        count = count + 1
-    end
-    return count
-end
-
 function registerClient(clientId, clientName)
-    if not clients[clientId] then
-        print("New client registered: " .. clientName .. " (ID: " .. clientId .. ")")
-    else
-        print("Client reconnected: " .. clientName .. " (ID: " .. clientId .. ")")
-    end
+    local isNew = not clients[clientId]
     
     clients[clientId] = {
         name = clientName,
         lastSeen = os.epoch("utc"),
-        online = true
+        online = true,
+        registered = true
     }
     
     if not messages[clientId] then
         messages[clientId] = {}
     end
     
-    return true
+    return true, isNew
 end
 
-function sendMessage(senderId, targetId, message, senderName)
-    if not clients[targetId] then
-        return false, "Client not found"
+function isDuplicateMessage(senderId, targetId, message, timestamp)
+    for _, msg in ipairs(messageHistory) do
+        if msg.sender == senderId and 
+           msg.target == targetId and 
+           msg.message == message and
+           os.epoch("utc") - msg.time < 5000 then
+            return true
+        end
+    end
+    return false
+end
+
+function sendMessage(senderId, targetId, message, senderName, messageId)
+    if not clients[targetId] or not clients[targetId].registered then
+        return false, "Client not found or not registered"
+    end
+    
+    if isDuplicateMessage(senderId, targetId, message, os.epoch("utc")) then
+        return true, "Message already sent"
     end
     
     local msg = {
-        id = #messageHistory + 1,
+        id = messageId or generateMessageId(),
         sender = senderId,
         senderName = senderName,
         target = targetId,
@@ -197,10 +249,6 @@ function sendMessage(senderId, targetId, message, senderName)
     table.insert(messageHistory, msg)
     table.insert(messages[targetId], msg)
     
-    print("[" .. os.date("%H:%M:%S") .. "] Message from " .. senderName .. 
-          " (" .. senderId .. ") to " .. clients[targetId].name .. 
-          " (" .. targetId .. "): " .. string.sub(message, 1, 20) .. (#message > 20 and "..." or ""))
-    
     if #messageHistory % 10 == 0 then
         saveData()
     end
@@ -210,8 +258,10 @@ end
 
 function getOnlineClients()
     local online = {}
+    local now = os.epoch("utc")
+    
     for id, client in pairs(clients) do
-        if client.online and os.epoch("utc") - client.lastSeen < 30000 then
+        if client.registered and client.online and now - client.lastSeen < 30000 then
             table.insert(online, {
                 id = id,
                 name = client.name
@@ -221,38 +271,71 @@ function getOnlineClients()
     return online
 end
 
+function getAllRegisteredClients()
+    local allClients = {}
+    local now = os.epoch("utc")
+    
+    for id, client in pairs(clients) do
+        if client.registered then
+            table.insert(allClients, {
+                id = id,
+                name = client.name,
+                online = client.online and now - client.lastSeen < 30000,
+                lastSeen = client.lastSeen
+            })
+        end
+    end
+    return allClients
+end
+
 function getClientMessages(clientId)
     local clientMsgs = messages[clientId] or {}
     local result = {}
     
-    for i = math.max(1, #clientMsgs - 49), #clientMsgs do
-        table.insert(result, clientMsgs[i])
+    -- Return all undelivered messages
+    for i = #clientMsgs, 1, -1 do
+        local msg = clientMsgs[i]
+        if not msg.delivered then
+            table.insert(result, msg)
+            msg.delivered = true
+        end
     end
     
-    for _, msg in ipairs(clientMsgs) do
-        msg.delivered = true
+    -- Clean old delivered messages (keep last 50)
+    local newQueue = {}
+    local count = 0
+    for i = #clientMsgs, 1, -1 do
+        local msg = clientMsgs[i]
+        if not msg.delivered or count < 50 then
+            table.insert(newQueue, 1, msg)
+            if msg.delivered then
+                count = count + 1
+            end
+        end
     end
+    
+    messages[clientId] = newQueue
     
     return result
 end
 
 function processRequest(senderId, request)
     if request.type == "register" then
-        local success = registerClient(senderId, request.name)
+        local success, isNew = registerClient(senderId, request.name)
         return {
             type = "register_response",
             success = success,
             serverName = SERVER_DISPLAY_NAME,
-            message = success and "OK" or "ERROR"
+            isNew = isNew
         }
         
     elseif request.type == "send_message" then
         local success, err = sendMessage(senderId, request.target, 
-                                        request.message, request.senderName)
+                                        request.message, request.senderName, request.messageId)
         return {
             type = "message_response",
             success = success,
-            messageId = #messageHistory,
+            messageId = request.messageId or generateMessageId(),
             error = not success and err or nil
         }
         
@@ -260,6 +343,13 @@ function processRequest(senderId, request)
         return {
             type = "online_list",
             clients = getOnlineClients(),
+            serverName = SERVER_DISPLAY_NAME
+        }
+        
+    elseif request.type == "get_all_clients" then
+        return {
+            type = "all_clients",
+            clients = getAllRegisteredClients(),
             serverName = SERVER_DISPLAY_NAME
         }
         
@@ -284,7 +374,8 @@ function processRequest(senderId, request)
             type = "server_info",
             serverName = SERVER_DISPLAY_NAME,
             serverId = os.getComputerID(),
-            onlineCount = #getOnlineClients()
+            onlineCount = #getOnlineClients(),
+            totalCount = #getAllRegisteredClients()
         }
     end
     
@@ -296,48 +387,36 @@ end
 
 function cleanupOldClients()
     local now = os.epoch("utc")
-    local removed = 0
     
     for id, client in pairs(clients) do
         if now - client.lastSeen > 300000 then
             client.online = false
-            removed = removed + 1
         end
-    end
-    
-    if removed > 0 then
-        print("Marked " .. removed .. " clients as offline")
     end
 end
 
-function serverStats()
-    local online = 0
-    local total = 0
-    local pending = 0
+function cleanupOldMessages()
+    local now = os.epoch("utc")
+    local cutoff = now - 86400000
     
-    for id, client in pairs(clients) do
-        total = total + 1
-        if client.online then
-            online = online + 1
+    local newHistory = {}
+    for _, msg in ipairs(messageHistory) do
+        if msg.time > cutoff then
+            table.insert(newHistory, msg)
         end
     end
     
-    for id, queue in pairs(messages) do
-        pending = pending + #queue
+    if #messageHistory ~= #newHistory then
+        messageHistory = newHistory
     end
-    
-    return {
-        online = online,
-        total = total,
-        pending = pending,
-        totalMessages = #messageHistory
-    }
 end
 
-function displayStats()
-    local stats = serverStats()
-    print(string.format("[%s] Stats: %d/%d online | %d pending | %d messages",
-        os.date("%H:%M:%S"), stats.online, stats.total, stats.pending, stats.totalMessages))
+function displayStatus()
+    local online = getOnlineClients()
+    local allClients = getAllRegisteredClients()
+    
+    print(string.format("[%s] Online: %d | Registered: %d",
+        os.date("%H:%M:%S"), #online, #allClients))
 end
 
 -- Main server loop
@@ -347,17 +426,18 @@ function main()
     print("\n=== Server Started ===")
     print("Server Name: " .. SERVER_DISPLAY_NAME)
     print("Server ID: " .. os.getComputerID())
+    print("Server Port: " .. PORT)
     print("Modem Side: " .. MODEM_SIDE)
     print("Waiting for connections...")
     print("Press Ctrl+T to stop server\n")
     
     while true do
-        local senderId, request, protocol = rednet.receive(nil, 2)
+        local senderId, request, protocol = rednet.receive(PORT, 2)
         
         if senderId then
-            if protocol == "messenger_server" then
+            if protocol == PORT then
                 local response = processRequest(senderId, request)
-                rednet.send(senderId, response, "messenger_server")
+                rednet.send(senderId, response, PORT)
             end
         end
         
@@ -366,7 +446,8 @@ function main()
         
         if event == "timer" then
             cleanupOldClients()
-            displayStats()
+            cleanupOldMessages()
+            displayStatus()
             
             if os.epoch("utc") % 60000 < 100 then
                 saveData()
