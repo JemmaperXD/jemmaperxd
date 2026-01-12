@@ -430,6 +430,10 @@ local function drawChatArea()
             term.setCursorPos(sidebarWidth + width/2 - #connectionError/2, height/2 + 1)
             term.setTextColor(colors.error)
             term.write(connectionError)
+        else
+            term.setCursorPos(sidebarWidth + width/2 - 10, height/2 + 2)
+            term.setTextColor(colors.text)
+            term.write("Searching for server...")
         end
         return
     end
@@ -669,18 +673,19 @@ local function main()
     print("Messenger client starting...")
     print("Client name: " .. clientName)
     
+    -- Initial UI draw
+    term.clear()
+    drawUI()
+    
     -- Main event loop
     local lastPingTime = os.time()
     local lastReconnectAttempt = os.time()
-    
-    term.clear()
     
     while true do
         -- Handle reconnection if not connected
         if not connected then
             local currentTime = os.time()
             if currentTime - lastReconnectAttempt >= RECONNECT_INTERVAL then
-                print("Attempting to connect...")
                 if findServer() then
                     local success, msg = connectToServer()
                     if success then
@@ -814,7 +819,7 @@ local function main()
             end
         end
         
-        -- Redraw UI
+        -- Redraw UI after every event or timeout
         drawUI()
     end
     
