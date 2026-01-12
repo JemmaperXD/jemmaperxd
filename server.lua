@@ -1,56 +1,89 @@
-local modem = peripheral.find("modem") or error("No modem found")
+-- Настройки
 local PORT = 1384
+local modem = peripheral.find("modem") or error("No modem found!")
 modem.open(PORT)
 
-local online_users = {} 
+local users = {} -- Список пользователей { [id] = name }
 local logs = {}
-local msg_id = 0
+local msg_count = 0
 
+-- Функция шифрования (должна совпадать с клиентской)
 local function encrypt(text, key)
     local res = ""
-    for i = 1, #text do res = res .. string.char((text:byte(i) + key) % 256) end
+    for i = 1, #text do
+        res = res .. string.char((text:byte(i) + key) % 256)
+    end
     return res
 end
 
-local function update_display()
+-- Отрисовка статистики сервера
+local function redraw()
     term.setBackgroundColor(colors.gray)
     term.clear()
     term.setCursorPos(1,1)
     term.setTextColor(colors.white)
-    print(" [TG-SERVER 2026] | Online: " .. #online_users)
-    print(string.rep("-", 40))
-    for i = math.max(1, #logs-12), #logs do print(logs[i]) end
+    print(" === TG-SERVER 2026 ACTIVE ===")
+    print(" ID: " .. os.getComputerID() .. " | Port: " .. PORT)
+    print(string.rep("-", 30))
+    
+    -- Вывод последних 10 логов
+    for i = math.max(1, #logs - 10), #logs do
+        print(logs[i])
+    end
 end
 
-local function main()
-    update_display()
-    while true do
-        local _, _, chan, reply, msg = os.pullEvent("modem_message")
-        if chan == PORT and type(msg) == "table" then
-            local now = os.epoch("utc") / 1000
-            if msg.type == "handshake" or msg.type == "ping" then
-                online_users[reply] = {name = msg.user, lastSeen = now}
-                local list = {}
-                for _, v in pairs(online_users) do table.insert(list, v.name) end
-                modem.transmit(reply, PORT, {type = "status", online = true, users = list})
-            elseif msg.type == "send" then
-                msg_id = msg_id + 1
-                local target_id = nil
-                for id, u in pairs(online_users) do if u.name == msg.to then target_id = id break end end
-                if target_id then
-                    modem.transmit(target_id, PORT, {type = "msg", from = msg.user, text = encrypt(msg.text, 7)})
-                    table.insert(logs, string.format("[%03d] %s -> %s", msg_id, msg.user, msg.to))
-                end
-                update_display()
+redraw()
+
+while true do
+    local event, side, channel, replyChannel, message = os.pullEvent("modem_message")
+    
+    if channel == PORT and type(message) == "table" then
+        -- 1. ОБРАБОТКА ПОДКЛЮЧЕНИЯ (HANDSHAKE / PING)
+        if message.type == "handshake" or message.type == "ping" then
+            users[replyChannel] = message.user
+            
+            -- Собираем список всех имен для клиента
+            local online_names = {}
+            for id, name in pairs(users) do
+                table.insert(online_names, name)
             end
+            
+            -- ОТВЕТ КЛИЕНТУ (Чтобы он не выдал ошибку "Could not connect")
+            modem.transmit(replyChannel, PORT, {
+                type = "status",
+                online = true,
+                users = online_names
+            })
+            
+        -- 2. ОБРАБОТКА ПЕРЕСЫЛКИ СООБЩЕНИЙ
+        elseif message.type == "send" then
+            msg_count = msg_count + 1
+            local target_id = nil
+            
+            -- Ищем ID получателя по имени
+            for id, name in pairs(users) do
+                if name == message.to then
+                    target_id = id
+                    break
+                end
+            end
+            
+            if target_id then
+                -- Шифруем сообщение перед отправкой (ключ 7 как в клиенте)
+                local encrypted_text = encrypt(message.text, 7)
+                
+                modem.transmit(target_id, PORT, {
+                    type = "msg",
+                    from = message.user,
+                    text = encrypted_text
+                })
+                
+                table.insert(logs, string.format("[%03d] %s -> %s", msg_count, message.user, message.to))
+            else
+                table.insert(logs, string.format("FAIL: %s to %s (Offline)", message.user, message.to))
+            end
+            
+            redraw()
         end
     end
 end
-
-parallel.waitForAll(main, function() 
-    while true do
-        local now = os.epoch("utc") / 1000
-        for id, data in pairs(online_users) do if now - data.lastSeen > 10 then online_users[id] = nil end end
-        sleep(5)
-    end
-end)
