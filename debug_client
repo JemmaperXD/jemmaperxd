@@ -1,0 +1,60 @@
+local SERVER_ID = 114 -- Ваш ID сервера
+local PORT = 1384
+local modem = peripheral.find("modem") or error("No modem found")
+modem.open(os.getComputerID())
+
+local username = "TestUser"
+local contacts = {}
+local messages = {}
+local target_user = nil
+local input_buffer = ""
+
+print("Client v5 started. My ID: " .. os.getComputerID())
+
+local function decrypt(text, key)
+    local res = ""
+    for i = 1, #text do res = res .. string.char((text:byte(i) - key) % 256) end
+    return res
+end
+
+-- Отправляем пинг и хендшейк в одном потоке
+local function networking_loop()
+    while true do
+        -- Пытаемся подключиться/обновить статус
+        modem.transmit(SERVER_ID, PORT, {type = "handshake", user = username})
+        sleep(2) -- Пингуем каждые 2 секунды
+    end
+end
+
+-- Главный цикл обработки событий и GUI
+local function main_loop()
+    while true do
+        term.clear()
+        print("TG-CC | Server: "..SERVER_ID)
+        print("Status: " .. (#contacts > 0 and "Online" or "Connecting..."))
+        print(string.rep("-", 40))
+        for i, name in ipairs(contacts) do print(" - " .. name) end
+        print(string.rep("-", 40))
+        print("Msgs: " .. #messages)
+        
+        local event, p1, p2, p3, p4 = os.pullEvent()
+
+        if event == "char" then
+            input_buffer = input_buffer .. p1
+        elseif event == "key" then
+            if p1 == keys.backspace then input_buffer = input_buffer:sub(1, -2) end
+            -- Убираем отправку, пока не заработает основная связь
+        elseif event == "modem_message" and p3 == SERVER_ID then
+            -- Печатаем в консоль полученные данные для отладки
+            print("DEBUG: Got message from Server ID " .. p3 .. ": " .. tostring(p4.type))
+            
+            if p4.type == "status" then 
+                contacts = p4.users
+            elseif p4.type == "msg" then 
+                table.insert(messages, {from=p4.from, text=decrypt(p4.text, 7)})
+            end
+        end
+    end
+end
+
+parallel.waitForAll(networking_loop, main_loop)
