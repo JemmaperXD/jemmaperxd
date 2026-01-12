@@ -1,5 +1,5 @@
 local modem = peripheral.find("modem") or error("No modem found")
-local SERVER_ID = 1384
+local SERVER_ID = 114
 local PORT = 1384
 modem.open(os.getComputerID())
 
