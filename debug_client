@@ -1,35 +1,12 @@
-local SERVER_ID = 1384 -- Используем ID, который сработал в ручном тесте
-local PORT = 1384
-local modem = peripheral.find("modem") or error("No modem found")
-modem.open(os.getComputerID())
-
-local username = "Debugger"
-local connected = false
-
-print("Debug Client v8 started.")
-print("Target Server ID: " .. SERVER_ID)
-print("My ID: " .. os.getComputerID())
-print(string.rep("-", 40))
-
--- Функция отправки запроса
-local function sendHandshake()
-    modem.transmit(SERVER_ID, PORT, {type = "handshake", user = username})
-    print("Sent handshake to " .. SERVER_ID)
-end
-
--- Первый запрос
-sendHandshake()
-local timer_id = os.startTimer(5)
-
+local m = peripheral.find("modem") or error("No modem found")
+m.open(1384)
+local SERVER_ID = 114
+print("Client ready. Target: " .. SERVER_ID)
 while true do
-    local event, p1, p2, p3, p4 = os.pullEvent()
-
-    if event == "modem_message" and p3 == SERVER_ID and type(p4) == "table" and p4.type == "status" then
-        print("SUCCESS: Connected to server! Status received.")
-        connected = true
-        break -- Выходим из цикла ожидания
-    elseif event == "timer" and p1 == timer_id then
-        print("ERROR: Timeout. Server offline or configuration error.")
-        break
+    m.transmit(SERVER_ID, 1384, "PING")
+    local _, _, _, _, msg = os.pullEvent("modem_message")
+    if msg == "PONG" then
+        print("SUCCESS: Connection OK!")
     end
+    sleep(1)
 end
