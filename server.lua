@@ -1,27 +1,77 @@
--- Messenger Server for CC:Tweaked
+---- Messenger Server for CC:Tweaked
 local VERSION = "1.0"
 local PORT = 7777
 local MAX_CLIENTS = 20
-local MODEM_SIDE = "back"
 
 -- Initialization
 print("=== Messenger Server v" .. VERSION .. " ===")
 print("Loading...")
 
-local modem = peripheral.find("modem")
+-- Function to find wireless modem
+function findWirelessModem()
+    print("Searching for wireless modem...")
+    
+    -- Get all peripherals
+    local sides = peripheral.getNames()
+    
+    for _, side in ipairs(sides) do
+        local type = peripheral.getType(side)
+        if type == "modem" then
+            -- Check if it's a wireless modem
+            local modem = peripheral.wrap(side)
+            if modem and modem.isWireless and modem.isWireless() then
+                print("Found wireless modem on side: " .. side)
+                return side
+            end
+        end
+    end
+    
+    -- If not found, list available peripherals
+    print("No wireless modem found!")
+    print("Available peripherals:")
+    for _, side in ipairs(sides) do
+        print("  " .. side .. " - " .. peripheral.getType(side))
+    end
+    
+    -- Ask user to specify side
+    print("Please enter modem side (left, right, top, bottom, back, front):")
+    local input = read()
+    
+    if input then
+        -- Check if this side has a modem
+        local modem = peripheral.wrap(input)
+        if modem and modem.isWireless and modem.isWireless() then
+            print("Using modem on side: " .. input)
+            return input
+        else
+            print("Error: No wireless modem found on side: " .. input)
+        end
+    end
+    
+    return nil
+end
+
+-- Find and open modem
+local MODEM_SIDE = findWirelessModem()
+if not MODEM_SIDE then
+    print("ERROR: Could not find wireless modem!")
+    print("Please attach a wireless modem and try again")
+    return
+end
+
+local modem = peripheral.wrap(MODEM_SIDE)
 if not modem then
-    print("ERROR: Modem not found!")
-    print("Please attach a wireless modem")
+    print("ERROR: Cannot access modem on side: " .. MODEM_SIDE)
     return
 end
 
 rednet.open(MODEM_SIDE)
-print("Modem opened on side: " .. MODEM_SIDE)
+print("Modem opened successfully on side: " .. MODEM_SIDE)
 
 -- Data structures
-local clients = {} -- id -> {name, lastSeen}
-local messages = {} -- queue: id -> array of messages
-local messageHistory = {} -- all messages
+local clients = {}
+local messages = {}
+local messageHistory = {}
 
 -- Functions
 function saveData()
@@ -31,28 +81,42 @@ function saveData()
     }
     
     local file = fs.open("server_data.dat", "w")
-    file.write(textutils.serialize(data))
-    file.close()
-    print("Data saved")
+    if file then
+        file.write(textutils.serialize(data))
+        file.close()
+        print("Data saved")
+    end
 end
 
 function loadData()
     if fs.exists("server_data.dat") then
         local file = fs.open("server_data.dat", "r")
-        local data = textutils.unserialize(file.readAll())
-        file.close()
-        
-        if data then
-            clients = data.clients or clients
-            messages = data.messages or messages
-            print("Data loaded")
+        if file then
+            local data = textutils.unserialize(file.readAll())
+            file.close()
+            
+            if data then
+                clients = data.clients or clients
+                messages = data.messages or messages
+                print("Data loaded: " .. #messageHistory .. " messages, " .. countTable(clients) .. " clients")
+            end
         end
     end
 end
 
+function countTable(tbl)
+    local count = 0
+    for _ in pairs(tbl) do
+        count = count + 1
+    end
+    return count
+end
+
 function registerClient(clientId, clientName)
     if not clients[clientId] then
-        print("New client: " .. clientName .. " (" .. clientId .. ")")
+        print("New client registered: " .. clientName .. " (ID: " .. clientId .. ")")
+    else
+        print("Client reconnected: " .. clientName .. " (ID: " .. clientId .. ")")
     end
     
     clients[clientId] = {
@@ -86,7 +150,9 @@ function sendMessage(senderId, targetId, message, senderName)
     table.insert(messageHistory, msg)
     table.insert(messages[targetId], msg)
     
-    print("Message from " .. senderName .. " to " .. clients[targetId].name)
+    print("[" .. os.date("%H:%M:%S") .. "] Message from " .. senderName .. 
+          " (" .. senderId .. ") to " .. clients[targetId].name .. 
+          " (" .. targetId .. "): " .. string.sub(message, 1, 20) .. (#message > 20 and "..." or ""))
     
     if #messageHistory % 10 == 0 then
         saveData()
@@ -129,7 +195,7 @@ function processRequest(senderId, request)
         return {
             type = "register_response",
             success = success,
-            message = success and "Registration successful" or "Registration failed"
+            message = success and "OK" or "ERROR"
         }
         
     elseif request.type == "send_message" then
@@ -163,17 +229,11 @@ function processRequest(senderId, request)
             type = "pong",
             time = os.epoch("utc")
         }
-        
-    elseif request.type == "get_client_info" then
-        return {
-            type = "client_info",
-            client = clients[request.clientId]
-        }
     end
     
     return {
         type = "error",
-        message = "Unknown request type"
+        message = "Bad request"
     }
 end
 
@@ -189,7 +249,7 @@ function cleanupOldClients()
     end
     
     if removed > 0 then
-        print("Offline clients: " .. removed)
+        print("Marked " .. removed .. " clients as offline")
     end
 end
 
@@ -219,16 +279,18 @@ end
 
 function displayStats()
     local stats = serverStats()
-    print(string.format("Stats: %d/%d online | %d pending | %d messages",
-        stats.online, stats.total, stats.pending, stats.totalMessages))
+    print(string.format("[%s] Stats: %d/%d online | %d pending | %d messages",
+        os.date("%H:%M:%S"), stats.online, stats.total, stats.pending, stats.totalMessages))
 end
 
 -- Main server loop
 function main()
     loadData()
     
-    print("Server started. ID: " .. os.getComputerID())
+    print("\n=== Server Started ===")
+    print("Server ID: " .. os.getComputerID())
     print("Waiting for connections...")
+    print("Press Ctrl+T to stop server\n")
     
     while true do
         local senderId, request, protocol = rednet.receive(nil, 2)
@@ -250,6 +312,10 @@ function main()
             if os.epoch("utc") % 60000 < 100 then
                 saveData()
             end
+        elseif event == "terminate" then
+            print("\nServer stopping...")
+            saveData()
+            break
         end
     end
 end
