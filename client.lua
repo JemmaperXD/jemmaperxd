@@ -3,97 +3,113 @@ local SERVER_ID = 1384
 local PORT = 1384
 modem.open(os.getComputerID())
 
--- Получение имени пользователя из папки
-local username = "Unknown"
+-- Нахождение имени пользователя
+local username = "Guest"
 if fs.exists(".User") then
     local files = fs.list(".User")
     if #files > 0 then username = files[1] end
 end
 
+local contacts = {}
 local messages = {}
-local input_to = ""
-local input_text = ""
-local active_field = "to" -- "to" or "msg"
+local target_user = "Nobody"
+local input_buffer = ""
+
+-- Окна (GUI)
+local w, h = term.getSize()
+local sidebar = window.create(term.current(), 1, 2, 15, h - 1)
+local chat_win = window.create(term.current(), 17, 2, w - 16, h - 4)
+local input_win = window.create(term.current(), 17, h - 1, w - 16, 1)
 
 local function decrypt(text, key)
-    local result = ""
-    for i = 1, #text do
-        result = result .. string.char((text:byte(i) - key) % 256)
-    end
-    return result
+    local res = ""
+    for i = 1, #text do res = res .. string.char((text:byte(i) - key) % 256) end
+    return res
 end
 
 local function draw_gui()
-    term.setBackgroundColor(colors.black)
-    term.clear()
-    
     -- Шапка
     term.setBackgroundColor(colors.blue)
-    term.setCursorPos(1,1)
-    term.clearLine()
-    print(" TG-CC | User: " .. username)
-    
-    -- Окно сообщений
-    term.setBackgroundColor(colors.black)
-    for i = 1, 10 do
-        term.setCursorPos(1, 2 + i)
-        if messages[i] then
-            print(messages[i])
-        end
-    end
-    
-    -- Поля ввода
-    term.setCursorPos(1, 15)
-    term.write("To: " .. (active_field == "to" and "> " or "") .. input_to)
-    term.setCursorPos(1, 16)
-    term.write("Msg: " .. (active_field == "msg" and "> " or "") .. input_text)
-    
-    term.setCursorPos(1, 18)
-    term.setTextColor(colors.yellow)
-    print("[ SEND ]  [ SWITCH FIELD ]")
+    term.clear()
+    term.setCursorPos(2, 1)
     term.setTextColor(colors.white)
+    term.write("TG CC:T | User: " .. username .. " | Chat with: " .. target_user)
+
+    -- Sidebar (Контакты)
+    sidebar.setBackgroundColor(colors.lightGray)
+    sidebar.clear()
+    sidebar.setCursorPos(1, 1)
+    sidebar.setTextColor(colors.black)
+    sidebar.write(" ONLINE: ")
+    for i, name in ipairs(contacts) do
+        sidebar.setCursorPos(1, i + 1)
+        if name == target_user then sidebar.setTextColor(colors.blue) else sidebar.setTextColor(colors.black) end
+        sidebar.write(" " .. name:sub(1, 13))
+    end
+
+    -- Chat Area
+    chat_win.setBackgroundColor(colors.black)
+    chat_win.clear()
+    local start_y = 1
+    for i = math.max(1, #messages - 10), #messages do
+        chat_win.setCursorPos(1, start_y)
+        chat_win.setTextColor(colors.gray)
+        chat_win.write(messages[i].from .. ": ")
+        chat_win.setTextColor(colors.white)
+        chat_win.write(messages[i].text)
+        start_y = start_y + 1
+    end
+
+    -- Input Area
+    input_win.setBackgroundColor(colors.gray)
+    input_win.clear()
+    input_win.setCursorPos(1, 1)
+    input_win.setTextColor(colors.white)
+    input_win.write("> " .. input_buffer)
 end
 
--- Авто-подключение к серверу
-modem.transmit(SERVER_ID, PORT, {type = "handshake", user = username})
+-- Поток пинга сервера
+local function ping_loop()
+    while true do
+        modem.transmit(SERVER_ID, PORT, {type = "ping", user = username})
+        sleep(5)
+    end
+end
 
-while true do
-    draw_gui()
-    local event, p1, p2, p3, p4, p5 = os.pullEvent()
-    
-    if event == "mouse_click" then
-        local x, y = p2, p3
-        if y == 18 then
-            if x <= 8 then -- Нажата кнопка SEND
+-- Поток обработки событий
+local function event_loop()
+    while true do
+        draw_gui()
+        local event, p1, p2, p3 = os.pullEvent()
+
+        if event == "char" then
+            input_buffer = input_buffer .. p1
+        elseif event == "key" then
+            if p1 == keys.backspace then
+                input_buffer = input_buffer:sub(1, -2)
+            elseif p1 == keys.enter and #input_buffer > 0 and target_user ~= "Nobody" then
                 modem.transmit(SERVER_ID, PORT, {
-                    type = "send",
-                    user = username,
-                    to = input_to,
-                    text = input_text
+                    type = "send", user = username, to = target_user, text = input_buffer
                 })
-                input_text = ""
-            elseif x >= 11 then -- SWITCH
-                active_field = (active_field == "to") and "msg" or "to"
+                table.insert(messages, {from = "Me", text = input_buffer})
+                input_buffer = ""
+            end
+        elseif event == "mouse_click" then
+            -- Выбор контакта в сайдбаре
+            if p2 <= 15 and p3 > 1 and contacts[p3 - 1] then
+                target_user = contacts[p3 - 1]
+            end
+        elseif event == "modem_message" then
+            local data = p3
+            if data.type == "user_list" then
+                contacts = data.users
+            elseif data.type == "msg" then
+                table.insert(messages, {from = data.from, text = decrypt(data.text, 7)})
+            elseif data.type == "ack" then
+                -- Можно добавить визуальный "галочку" (чекбокс)
             end
         end
-        
-    elseif event == "char" then
-        if active_field == "to" then input_to = input_to .. p1
-        else input_text = input_text .. p1 end
-        
-    elseif event == "key" then
-        if p1 == keys.backspace then
-            if active_field == "to" then input_to = input_to:sub(1, -2)
-            else input_text = input_text:sub(1, -2) end
-        end
-        
-    elseif event == "modem_message" then
-        local msg = p4
-        if msg.type == "msg" then
-            local decoded = decrypt(msg.text, 5)
-            table.insert(messages, "["..msg.from.."]: "..decoded)
-        elseif msg.type == "ack" then
-            table.insert(messages, "Server: Msg "..msg.id.." Delivered")
-        end
     end
 end
+
+parallel.waitForAll(ping_loop, event_loop)
