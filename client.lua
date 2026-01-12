@@ -61,12 +61,13 @@ end
 -- Parse command line arguments
 local args = {...}
 local explicitName = nil
+local explicitModem = nil
 
 for i = 1, #args do
     if args[i] == "-n" or args[i] == "--name" then
         explicitName = args[i+1]
     elseif args[i] == "-m" or args[i] == "--modem" then
-        modemSide = args[i+1]
+        explicitModem = args[i+1]
     elseif args[i] == "-h" or args[i] == "--help" then
         print("Usage: client [options]")
         print("Options:")
@@ -126,6 +127,11 @@ if not clientName or clientName == "" then
     clientName = "Anonymous"
 end
 
+-- Set modem side from command line
+if explicitModem then
+    modemSide = explicitModem
+end
+
 -- Utility functions
 local function loadConfig()
     if fs.exists(CONFIG_FILE) then
@@ -148,6 +154,7 @@ local function findModem()
         if peripheral.getType(modemSide) == "modem" then
             return true
         else
+            print("Error: Modem not found on side: " .. modemSide)
             return false
         end
     end
@@ -159,6 +166,9 @@ local function findModem()
             return true
         end
     end
+    
+    print("Error: No wireless modem found!")
+    print("Attach a modem to any side of the computer.")
     return false
 end
 
@@ -168,14 +178,17 @@ local function findServer()
         if type(servers) == "table" then
             if #servers > 0 then
                 serverId = servers[1]
+                print("Found server with ID: " .. serverId)
                 return true
             end
         else
             -- In some versions, rednet.lookup returns a single number
             serverId = servers
+            print("Found server with ID: " .. serverId)
             return true
         end
     end
+    print("No server found with protocol: " .. PROTOCOL)
     return false
 end
 
@@ -185,6 +198,7 @@ local function connectToServer()
     end
     
     -- Send registration request
+    print("Attempting to connect to server ID: " .. serverId)
     local success = rednet.send(serverId, {
         type = "register",
         clientName = clientName,
@@ -201,11 +215,13 @@ local function connectToServer()
         local senderId, message, protocol = rednet.receive(PROTOCOL, 0.5)
         if senderId and senderId == serverId and protocol == PROTOCOL then
             if message.type == "register_ack" then
-                serverName = message.serverName
+                serverName = message.serverName or "Unknown Server"
                 contacts = message.clients or {}
                 connected = true
                 connectionError = nil
                 lastPing = os.time()
+                
+                print("Successfully registered as: " .. clientName)
                 
                 -- Load messages
                 rednet.send(serverId, {
@@ -231,7 +247,9 @@ local function connectToServer()
 end
 
 local function sendPing()
-    if not connected then return end
+    if not connected or not serverId then 
+        return false 
+    end
     
     local success = rednet.send(serverId, {
         type = "ping",
@@ -240,18 +258,24 @@ local function sendPing()
     
     if success then
         lastPing = os.time()
+        return true
     else
         connected = false
         connectionError = "Failed to send ping"
+        return false
     end
 end
 
 local function sendMessage(text)
-    if not connected or not selectedContact then
-        return false, "Not connected or no contact selected"
+    if not connected or not serverId then
+        return false, "Not connected to server"
     end
     
-    if text == "" then
+    if not selectedContact then
+        return false, "No contact selected"
+    end
+    
+    if not text or text == "" then
         return false, "Message cannot be empty"
     end
     
@@ -275,15 +299,18 @@ local function sendMessage(text)
         isLocal = true
     }
     
-    messages[selectedContact] = messages[selectedContact] or {}
+    if not messages[selectedContact] then
+        messages[selectedContact] = {}
+    end
+    
     table.insert(messages[selectedContact], message)
     
     if #messages[selectedContact] > MAX_MESSAGE_HISTORY then
         table.remove(messages[selectedContact], 1)
     end
     
-    -- Исправлено: добавлена проверка на nil
-    uiState.messageScroll = math.max(0, (#messages[selectedContact] or 0) - 10)
+    -- Автоматически прокручиваем к новому сообщению
+    uiState.messageScroll = math.max(0, (#messages[selectedContact]) - 10)
     
     return true, "Message sent"
 end
@@ -295,6 +322,8 @@ local function formatTime(timestamp)
 end
 
 local function wrapText(text, width)
+    if not text then return {} end
+    
     local lines = {}
     local line = ""
     
@@ -315,6 +344,10 @@ local function wrapText(text, width)
         table.insert(lines, line)
     end
     
+    if #lines == 0 then
+        lines = {""}
+    end
+    
     return lines
 end
 
@@ -326,48 +359,57 @@ local function clearScreen()
 end
 
 local function drawSidebar()
-    local width = math.floor(term.getSize() * 0.2)
-    local height = term.getSize()
+    local width, height = term.getSize()
+    local sidebarWidth = math.floor(width * 0.2)
     
-    term.setBackgroundColor(colors.sidebar)
-    term.clear()
+    -- Очистка боковой панели
+    for y = 1, height do
+        term.setCursorPos(1, y)
+        term.setBackgroundColor(colors.sidebar)
+        term.clearLine()
+    end
     
     term.setCursorPos(1, 1)
     term.setTextColor(colors.text)
     term.write("Contacts")
     
+    -- Статус подключения
+    term.setCursorPos(1, 2)
     if connected then
-        term.setCursorPos(1, 2)
         term.setTextColor(colors.success)
         term.write("✓ ")
         term.setTextColor(colors.text)
         term.write(serverName or "Server")
     else
-        term.setCursorPos(1, 2)
         term.setTextColor(colors.error)
         term.write("✗ Disconnected")
     end
     
+    -- Имя пользователя
     term.setCursorPos(1, 3)
     term.setTextColor(colors.timestamp)
     term.write("You: " .. clientName)
     
+    -- Ошибка подключения (если есть)
+    local errorLine = 4
     if connectionError then
-        term.setCursorPos(1, 4)
+        term.setCursorPos(1, errorLine)
         term.setTextColor(colors.error)
         local errText = "Error: " .. connectionError
-        if #errText > width - 2 then
-            errText = errText:sub(1, width - 5) .. "..."
+        if #errText > sidebarWidth - 2 then
+            errText = errText:sub(1, sidebarWidth - 5) .. "..."
         end
         term.write(errText)
+        errorLine = errorLine + 1
     end
     
-    term.setCursorPos(1, 6)
-    term.setTextColor(colors.text)
-    term.write("---")
+    -- Разделитель
+    term.setCursorPos(1, errorLine)
+    term.setTextColor(colors.timestamp)
+    term.write(string.rep("-", sidebarWidth))
     
-    -- Contacts list
-    local startY = 7
+    -- Список контактов
+    local startY = errorLine + 1
     local i = 0
     local contactList = {}
     
@@ -376,10 +418,14 @@ local function drawSidebar()
         table.insert(contactList, {id = contactId, data = contact})
     end
     
+    -- Сортируем контакты по имени
+    table.sort(contactList, function(a, b)
+        return (a.data.name or "Unknown") < (b.data.name or "Unknown")
+    end)
+    
     for _, contactEntry in ipairs(contactList) do
-        -- Исправлено: добавлены проверки на nil
         local contactScroll = uiState.contactScroll or 0
-        if i >= contactScroll and startY + i - contactScroll < height then
+        if i >= contactScroll and startY + i - contactScroll <= height then
             local y = startY + i - contactScroll
             local contactId = contactEntry.id
             local contact = contactEntry.data
@@ -394,16 +440,16 @@ local function drawSidebar()
                 term.setBackgroundColor(colors.sidebar)
             end
             
-            term.setTextColor(colors.text)
-            
-            -- New message indicator
+            -- Индикатор непрочитанных сообщений
             if unreadCount[contactId] and unreadCount[contactId] > 0 then
                 term.setTextColor(colors.unread)
                 term.write("[" .. unreadCount[contactId] .. "] ")
                 term.setTextColor(colors.text)
+            else
+                term.setTextColor(colors.text)
             end
             
-            -- Status
+            -- Статус онлайн/офлайн
             if contact.status == "online" then
                 term.setTextColor(colors.success)
                 term.write("● ")
@@ -414,10 +460,10 @@ local function drawSidebar()
             
             term.setTextColor(colors.text)
             
-            -- Name
+            -- Имя контакта
             local displayName = contact.name or "Unknown"
-            if #displayName > width - 4 then
-                displayName = displayName:sub(1, width - 7) .. "..."
+            if #displayName > sidebarWidth - 4 then
+                displayName = displayName:sub(1, sidebarWidth - 7) .. "..."
             end
             
             term.write(displayName)
@@ -440,69 +486,92 @@ local function drawChatArea()
     end
     
     if not connected then
-        term.setCursorPos(sidebarWidth + chatWidth/2 - 15, chatHeight/2 - 1)
+        local message = "Not connected to server"
+        term.setCursorPos(sidebarWidth + math.floor(chatWidth/2) - math.floor(#message/2), math.floor(chatHeight/2) - 1)
         term.setTextColor(colors.warning)
-        term.write("Not connected to server")
+        term.write(message)
         
         if connectionError then
-            term.setCursorPos(sidebarWidth + chatWidth/2 - #connectionError/2, chatHeight/2 + 1)
+            term.setCursorPos(sidebarWidth + math.floor(chatWidth/2) - math.floor(#connectionError/2), math.floor(chatHeight/2) + 1)
             term.setTextColor(colors.error)
             term.write(connectionError)
         else
-            term.setCursorPos(sidebarWidth + chatWidth/2 - 10, chatHeight/2 + 2)
+            local searching = "Searching for server..."
+            term.setCursorPos(sidebarWidth + math.floor(chatWidth/2) - math.floor(#searching/2), math.floor(chatHeight/2) + 2)
             term.setTextColor(colors.text)
-            term.write("Searching for server...")
+            term.write(searching)
         end
         return
     end
     
     if not selectedContact then
-        term.setCursorPos(sidebarWidth + chatWidth/2 - 10, chatHeight/2)
+        local message = "Select contact to chat"
+        term.setCursorPos(sidebarWidth + math.floor(chatWidth/2) - math.floor(#message/2), math.floor(chatHeight/2))
         term.setTextColor(colors.text)
-        term.write("Select contact to chat")
+        term.write(message)
         return
     end
     
     local contactName = contacts[selectedContact] and contacts[selectedContact].name or "Unknown"
+    
+    -- Заголовок чата
     term.setCursorPos(sidebarWidth + 1, 1)
     term.setTextColor(colors.text)
     term.write("Chat with: ")
     term.setTextColor(colors.highlight)
     term.write(contactName)
     
-    -- Message history
+    -- Разделитель
+    term.setCursorPos(sidebarWidth + 1, 2)
+    term.setTextColor(colors.timestamp)
+    term.write(string.rep("-", chatWidth))
+    
+    -- История сообщений
     local chatMessages = messages[selectedContact] or {}
-    -- Исправлено: добавлены проверки на nil
     local messageScroll = uiState.messageScroll or 0
-    local startMessage = math.max(1, (#chatMessages or 0) - chatHeight + 3 - messageScroll)
+    local maxVisible = chatHeight - 3
+    local totalMessages = #chatMessages
+    
+    if totalMessages == 0 then
+        local noMessages = "No messages yet. Start the conversation!"
+        term.setCursorPos(sidebarWidth + math.floor(chatWidth/2) - math.floor(#noMessages/2), math.floor(chatHeight/2))
+        term.setTextColor(colors.timestamp)
+        term.write(noMessages)
+        return
+    end
+    
+    local startMessage = math.max(1, totalMessages - maxVisible - messageScroll + 1)
     local y = 3
     
-    for i = startMessage, #chatMessages do
+    for i = startMessage, totalMessages do
         if y > chatHeight then break end
         
         local msg = chatMessages[i]
+        if not msg then break end
+        
         term.setCursorPos(sidebarWidth + 1, y)
         
+        -- Определяем отправителя
         if msg.senderId == serverId or msg.senderName == clientName or msg.isLocal then
             term.setTextColor(colors.highlight)
             term.write("You: ")
         else
             term.setTextColor(colors.success)
-            term.write(msg.senderName .. ": ")
+            term.write((msg.senderName or "Unknown") .. ": ")
         end
         
         term.setTextColor(colors.text)
         
-        -- Time
+        -- Время
         term.setCursorPos(sidebarWidth + chatWidth - 6, y)
         term.setTextColor(colors.timestamp)
         term.write(formatTime(msg.timestamp))
         
-        -- Message text
+        -- Текст сообщения
         term.setCursorPos(sidebarWidth + 1, y + 1)
         term.setTextColor(colors.text)
         
-        local lines = wrapText(msg.text, chatWidth - 2)
+        local lines = wrapText(msg.text or "", chatWidth - 2)
         for j, line in ipairs(lines) do
             if y + j > chatHeight then break end
             term.setCursorPos(sidebarWidth + 1, y + j)
@@ -510,6 +579,19 @@ local function drawChatArea()
         end
         
         y = y + #lines + 2
+    end
+    
+    -- Показать индикатор прокрутки
+    if messageScroll > 0 then
+        term.setCursorPos(sidebarWidth + chatWidth - 3, 3)
+        term.setTextColor(colors.timestamp)
+        term.write("↑")
+    end
+    
+    if totalMessages - messageScroll > maxVisible then
+        term.setCursorPos(sidebarWidth + chatWidth - 3, chatHeight)
+        term.setTextColor(colors.timestamp)
+        term.write("↓")
     end
 end
 
@@ -566,6 +648,7 @@ local function drawInputArea()
     -- Cursor
     local cursorX = sidebarWidth + 3 + math.min(#displayText, maxWidth)
     term.setCursorPos(cursorX, inputY)
+    term.setCursorBlink(true)
     
     -- Help
     term.setCursorPos(sidebarWidth + 1, height)
@@ -619,8 +702,12 @@ end
 
 -- Server message handlers
 local function handleServerMessage(message)
+    if not message or not message.type then return end
+    
     if message.type == "new_message" then
         local msg = message.message
+        if not msg or not msg.senderId then return end
+        
         messages[msg.senderId] = messages[msg.senderId] or {}
         table.insert(messages[msg.senderId], msg)
         
@@ -628,9 +715,11 @@ local function handleServerMessage(message)
             unreadCount[msg.senderId] = (unreadCount[msg.senderId] or 0) + 1
             
             -- Sound notification
-            if peripheral.getType("speaker") then
-                local speaker = peripheral.wrap("speaker")
-                speaker.playSound("block.note_block.pling", 0.5)
+            if peripheral.isPresent("speaker") then
+                local speaker = peripheral.find("speaker")
+                if speaker then
+                    speaker.playSound("block.note_block.pling", 0.5)
+                end
             end
         end
         
@@ -639,25 +728,31 @@ local function handleServerMessage(message)
         end
         
     elseif message.type == "client_online" then
-        contacts[message.clientId] = {
-            name = message.clientName,
-            status = "online"
-        }
+        if message.clientId then
+            contacts[message.clientId] = {
+                name = message.clientName or "Unknown",
+                status = "online"
+            }
+        end
         
     elseif message.type == "client_offline" then
-        if contacts[message.clientId] then
+        if message.clientId and contacts[message.clientId] then
             contacts[message.clientId].status = "offline"
         end
         
     elseif message.type == "messages" then
         -- Process incoming messages
-        for _, msg in ipairs(message.messages) do
-            local senderId = msg.senderId
-            messages[senderId] = messages[senderId] or {}
-            table.insert(messages[senderId], msg)
-            
-            if senderId ~= selectedContact then
-                unreadCount[senderId] = (unreadCount[senderId] or 0) + 1
+        if message.messages and type(message.messages) == "table" then
+            for _, msg in ipairs(message.messages) do
+                if msg and msg.senderId then
+                    local senderId = msg.senderId
+                    messages[senderId] = messages[senderId] or {}
+                    table.insert(messages[senderId], msg)
+                    
+                    if senderId ~= selectedContact then
+                        unreadCount[senderId] = (unreadCount[senderId] or 0) + 1
+                    end
+                end
             end
         end
         
@@ -693,27 +788,28 @@ local function main()
     
     print("Messenger client starting...")
     print("Client name: " .. clientName)
+    print("Modem side: " .. modemSide)
     print("Press F1 for help, Ctrl+T to exit")
     sleep(2) -- Give user time to read
     
-    -- Initial UI draw
+    -- Main event loop
+    local lastPingTime = os.time()
+    local lastReconnectAttempt = os.time() - RECONNECT_INTERVAL
+    local lastUIRefresh = os.time()
+    
     clearScreen()
     drawUI()
     
-    -- Main event loop
-    local lastPingTime = os.time()
-    local lastReconnectAttempt = os.time()
-    local lastUIRefresh = os.time()
-    
     while true do
+        local eventTime = os.time()
+        
         -- Handle reconnection if not connected
         if not connected then
-            local currentTime = os.time()
-            if currentTime - lastReconnectAttempt >= RECONNECT_INTERVAL then
+            if eventTime - lastReconnectAttempt >= RECONNECT_INTERVAL then
                 if findServer() then
                     local success, msg = connectToServer()
                     if success then
-                        print(msg)
+                        print("Connected: " .. msg)
                         connectionError = nil
                     else
                         connectionError = msg
@@ -723,59 +819,71 @@ local function main()
                     connectionError = "Server not found"
                     print("Server not found. Retrying...")
                 end
-                lastReconnectAttempt = currentTime
-            end
-        end
-        
-        -- Handle rednet messages
-        local senderId, message, protocol = rednet.receive(PROTOCOL, 0.1)
-        if senderId and protocol == PROTOCOL then
-            if senderId == serverId then
-                handleServerMessage(message)
+                lastReconnectAttempt = eventTime
+                drawUI()
             end
         end
         
         -- Send ping if connected
-        if connected and os.time() - lastPingTime > PING_INTERVAL then
+        if connected and eventTime - lastPingTime >= PING_INTERVAL then
             sendPing()
-            lastPingTime = os.time()
+            lastPingTime = eventTime
         end
         
-        -- Auto-refresh UI every second
-        if os.time() - lastUIRefresh >= 1 then
+        -- Handle rednet messages with timeout
+        local senderId, message, protocol
+        local startTime = os.clock()
+        while os.clock() - startTime < 0.1 do
+            senderId, message, protocol = rednet.receive(PROTOCOL, 0.05)
+            if senderId and protocol == PROTOCOL then
+                if senderId == serverId then
+                    handleServerMessage(message)
+                end
+                break
+            end
+        end
+        
+        -- Auto-refresh UI every 0.5 seconds
+        if eventTime - lastUIRefresh >= 0.5 then
             drawUI()
-            lastUIRefresh = os.time()
+            lastUIRefresh = eventTime
         end
         
-        -- Handle events with timeout
-        local event, p1, p2, p3 = os.pullEventRaw(0.1)
+        -- Handle events with very short timeout
+        local event, p1, p2, p3 = os.pullEventRaw(0.05)
         
         if event == "rednet_message" then
             local sId, msg, proto = p1, p2, p3
             if proto == PROTOCOL and sId == serverId then
                 handleServerMessage(msg)
+                drawUI()
             end
             
         elseif event == "key" then
             local key = p1
             
             if key == 20 then -- Ctrl+T
+                term.setCursorBlink(false)
                 break
                 
             elseif key == 63 then -- F1
                 uiState.showHelp = not uiState.showHelp
+                drawUI()
                 
             elseif key == 28 then -- Enter
                 if uiState.showHelp then
                     uiState.showHelp = false
+                    drawUI()
                 else
-                    -- If no contact selected, try to select first contact
+                    -- Если нет выбранного контакта, выбираем первый
                     if not selectedContact then
                         for contactId, _ in pairs(contacts) do
                             selectedContact = contactId
                             unreadCount[contactId] = 0
+                            uiState.messageScroll = 0
                             break
                         end
+                        drawUI()
                     elseif (uiState.inputText or "") ~= "" and selectedContact and connected then
                         local success, msg = sendMessage(uiState.inputText)
                         if not success then
@@ -783,6 +891,7 @@ local function main()
                         end
                         uiState.inputText = ""
                         uiState.inputCursor = 1
+                        drawUI()
                     end
                 end
                 
@@ -790,28 +899,42 @@ local function main()
                 if #(uiState.inputText or "") > 0 then
                     uiState.inputText = uiState.inputText:sub(1, -2)
                     uiState.inputCursor = math.max(1, (uiState.inputCursor or 1) - 1)
+                    drawUI()
                 end
                 
             elseif key == 200 then -- Up arrow
                 uiState.contactScroll = math.max(0, (uiState.contactScroll or 0) - 1)
+                drawUI()
                 
             elseif key == 208 then -- Down arrow
                 uiState.contactScroll = (uiState.contactScroll or 0) + 1
+                drawUI()
                 
             elseif key == 201 then -- Page Up
                 if selectedContact then
                     uiState.messageScroll = math.min(#(messages[selectedContact] or {}), 
                         (uiState.messageScroll or 0) + 5)
+                    drawUI()
                 end
                 
             elseif key == 209 then -- Page Down
                 uiState.messageScroll = math.max(0, (uiState.messageScroll or 0) - 5)
+                drawUI()
+                
+            elseif key == 203 then -- Left arrow
+                uiState.inputCursor = math.max(1, (uiState.inputCursor or 1) - 1)
+                drawUI()
+                
+            elseif key == 205 then -- Right arrow
+                uiState.inputCursor = math.min(#(uiState.inputText or "") + 1, (uiState.inputCursor or 1) + 1)
+                drawUI()
             end
             
         elseif event == "char" then
             if not uiState.showHelp and connected then
                 uiState.inputText = (uiState.inputText or "") .. p1
                 uiState.inputCursor = (uiState.inputCursor or 1) + 1
+                drawUI()
             end
             
         elseif event == "mouse_click" then
@@ -820,13 +943,14 @@ local function main()
             
             if x <= sidebarWidth then
                 -- Click in sidebar
-                local contactIndex = y - 6 + (uiState.contactScroll or 0)
+                local contactIndex = y - 7 + (uiState.contactScroll or 0)
                 local i = 1
                 for contactId, _ in pairs(contacts) do
                     if i == contactIndex then
                         selectedContact = contactId
                         unreadCount[contactId] = 0
                         uiState.messageScroll = 0
+                        drawUI()
                         break
                     end
                     i = i + 1
@@ -834,7 +958,7 @@ local function main()
             end
             
         elseif event == "term_resize" then
-            -- Redraw on resize
+            drawUI()
             
         elseif event == "mouse_scroll" then
             local direction, x, y = p1, p2, p3
@@ -845,13 +969,12 @@ local function main()
             else
                 uiState.messageScroll = math.max(0, (uiState.messageScroll or 0) + direction)
             end
+            drawUI()
         end
-        
-        -- Always redraw UI after handling events
-        drawUI()
     end
     
     -- Clean shutdown
+    term.setCursorBlink(false)
     print("Disconnecting...")
     rednet.close(modemSide)
     print("Client stopped")
@@ -860,6 +983,7 @@ end
 -- Start with error handling
 local success, err = pcall(main)
 if not success then
+    term.setCursorBlink(false)
     print("Client crashed with error: " .. err)
     print("Press any key to exit...")
     os.pullEvent("key")
