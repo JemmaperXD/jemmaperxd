@@ -18,7 +18,7 @@ local json = textutils.serialize and {
 
 -- Нахождение имени пользователя по /.user/*
 local function detect_username()
-    local root = "/.user"
+    local root = "/.User"
     if not fs.exists(root) or not fs.isDir(root) then
         -- Если нет каталога, создать и предложить имя
         pcall(fs.makeDir, root)
