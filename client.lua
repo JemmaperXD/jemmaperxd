@@ -136,8 +136,7 @@ local state = {
     connected = false,
     lastPing = 0,
     serverId = SERVER_ID,
-    serverName = "Unknown",
-    sentMessages = {} -- Track sent message IDs to prevent duplicates
+    serverName = "Unknown"
 }
 
 print("Client name: " .. state.username)
@@ -161,10 +160,6 @@ local gui = {
 }
 
 -- Network functions
-function generateMessageId()
-    return os.getComputerID() .. "_" .. os.epoch("utc") .. "_" .. math.random(1000, 9999)
-end
-
 function sendRequest(request)
     rednet.send(SERVER_ID, request, "messenger_server")
     
@@ -196,24 +191,14 @@ function connectToServer()
 end
 
 function sendMessage(targetId, message)
-    local messageId = generateMessageId()
-    
-    -- Check if we already sent this message recently
-    if state.sentMessages[messageId] then
-        print("Warning: Duplicate message detected, not sending")
-        return false
-    end
-    
     local response = sendRequest({
         type = "send_message",
         target = targetId,
         message = message,
-        senderName = state.username,
-        messageId = messageId
+        senderName = state.username
     })
     
     if response and response.success then
-        state.sentMessages[messageId] = os.epoch("utc")
         return true
     else
         print("Failed to send message: " .. (response and response.error or "timeout"))
@@ -250,23 +235,6 @@ function updateContacts()
     return false
 end
 
-function isMessageDuplicate(msg)
-    -- Check if we already have this message
-    for _, existing in ipairs(state.messages) do
-        if existing.id == msg.id then
-            return true
-        end
-        -- Also check by content and time (within 2 seconds)
-        if existing.sender == msg.sender and 
-           existing.target == msg.target and 
-           existing.message == msg.message and
-           math.abs(existing.time - msg.time) < 2000 then
-            return true
-        end
-    end
-    return false
-end
-
 function getNewMessages()
     local response = sendRequest({
         type = "get_messages"
@@ -275,10 +243,8 @@ function getNewMessages()
     if response and response.messages then
         local newCount = 0
         for _, msg in ipairs(response.messages) do
-            if not isMessageDuplicate(msg) then
-                table.insert(state.messages, msg)
-                newCount = newCount + 1
-            end
+            table.insert(state.messages, msg)
+            newCount = newCount + 1
         end
         
         if newCount > 0 then
@@ -315,22 +281,6 @@ function sendPing()
     state.lastPing = os.clock()
 end
 
-function cleanupOldSentMessages()
-    local now = os.epoch("utc")
-    local cutoff = now - 60000 -- 1 minute
-    
-    local toRemove = {}
-    for msgId, timestamp in pairs(state.sentMessages) do
-        if timestamp < cutoff then
-            table.insert(toRemove, msgId)
-        end
-    end
-    
-    for _, msgId in ipairs(toRemove) do
-        state.sentMessages[msgId] = nil
-    end
-end
-
 -- GUI functions
 function drawBorder()
     term.setBackgroundColor(colors.blue)
@@ -349,6 +299,7 @@ function drawBorder()
     
     -- Status
     local status = state.connected and "ONLINE" or "OFFLINE"
+    local statusColor = state.connected and colors.green or colors.red
     
     term.setCursorPos(WIDTH - 8, 1)
     if state.connected then
@@ -455,6 +406,7 @@ function drawMessages()
     
     -- Get contact name
     local contactName = "Unknown"
+    local contactId = state.currentContact
     for _, c in ipairs(state.contacts) do
         if c.id == state.currentContact then
             contactName = c.name
@@ -679,18 +631,14 @@ function handleInput()
                 if state.currentContact then
                     -- Send message
                     if gui.inputText ~= "" then
-                        local message = gui.inputText
-                        if sendMessage(state.currentContact, message) then
-                            -- Add message to local display immediately
-                            local tempMsg = {
-                                id = generateMessageId(),
+                        if sendMessage(state.currentContact, gui.inputText) then
+                            table.insert(state.messages, {
                                 sender = os.getComputerID(),
                                 senderName = state.username,
                                 target = state.currentContact,
-                                message = message,
+                                message = gui.inputText,
                                 time = os.epoch("utc")
-                            }
-                            table.insert(state.messages, tempMsg)
+                            })
                             gui.inputText = ""
                             gui.inputScroll = 0
                             drawUI()
@@ -771,7 +719,6 @@ function main()
                 if state.connected then
                     updateContacts()
                     getNewMessages()
-                    cleanupOldSentMessages()
                     
                     if os.clock() - state.lastPing > PING_INTERVAL then
                         sendPing()
