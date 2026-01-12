@@ -1,13 +1,10 @@
-local PORT = 1384
-local modem = peripheral.find("modem") or error("No modem found")
-modem.open(PORT)
-
-print("Simple Server active. My ID: " .. os.getComputerID())
-
+local m = peripheral.find("modem") or error("No modem found")
+m.open(1384)
+print("Server ready. ID: " .. os.getComputerID())
 while true do
-    local _, _, channel, replyID, msg = os.pullEvent("modem_message")
+    local _, _, _, id, msg = os.pullEvent("modem_message")
     if msg == "PING" then
-        print("Received PING from " .. replyID .. ", sending PONG...")
-        modem.transmit(replyID, PORT, "PONG")
+        print("Got PING from " .. id .. ". Sending PONG.")
+        m.transmit(id, 1384, "PONG")
     end
 end
