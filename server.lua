@@ -7,190 +7,192 @@ local serialization = require("serialization")
 -- Конфигурация
 local SERVER_ID = 1384
 local PORT = 4000
-local USERS_FILE = "/users.dat"
-local MESSAGES_FILE = "/messages.dat"
+local ENCRYPTION_KEY = "supersecretkey123"
+local USERS_DIR = "/.user/"
 
--- Данные
-local users = {}
+-- Хранилище данных
 local messages = {}
+local users = {}
 local messageCounter = 0
+local onlineUsers = {}
 
--- Загрузка данных
-local function loadData()
-    if fs.exists(USERS_FILE) then
-        local file = io.open(USERS_FILE, "r")
-        if file then
-            local content = file:read("*all")
-            users = serialization.unserialize(content) or {}
-            file:close()
-        end
-    end
-    
-    if fs.exists(MESSAGES_FILE) then
-        local file = io.open(MESSAGES_FILE, "r")
-        if file then
-            local content = file:read("*all")
-            messages = serialization.unserialize(content) or {}
-            messageCounter = #messages
-            file:close()
-        end
-    end
+-- Создание директорий
+if not fs.exists(USERS_DIR) then
+    fs.makeDirectory(USERS_DIR)
 end
 
--- Сохранение данных
-local function saveData()
-    local userFile = io.open(USERS_FILE, "w")
-    if userFile then
-        userFile:write(serialization.serialize(users))
-        userFile:close()
-    end
-    
-    local msgFile = io.open(MESSAGES_FILE, "w")
-    if msgFile then
-        msgFile:write(serialization.serialize(messages))
-        msgFile:close()
-    end
-end
-
--- Шифрование (простой XOR)
+-- Простое XOR шифрование
 local function encrypt(text, key)
     local result = ""
     for i = 1, #text do
-        local char = string.byte(text, i)
-        local keyChar = string.byte(key, (i % #key) + 1)
-        result = result .. string.char(bit32.bxor(char, keyChar))
+        local char = string.byte(text:sub(i,i))
+        local keyChar = string.byte(key:sub((i-1)%#key+1,(i-1)%#key+1))
+        result = result .. string.char(char ~ keyChar)
     end
     return result
 end
 
 local function decrypt(text, key)
-    return encrypt(text, key) -- XOR симметричен
+    return encrypt(text, key) -- XOR симметричный
+end
+
+-- Генерация ID сообщения
+local function generateMessageId()
+    messageCounter = messageCounter + 1
+    return "MSG" .. os.time() .. "_" .. messageCounter
+end
+
+-- Получение имени пользователя
+local function getUsername(address)
+    local userFile = USERS_DIR .. address
+    if fs.exists(userFile) then
+        local file = io.open(userFile, "r")
+        if file then
+            local username = file:read("*l")
+            file:close()
+            return username or "Unknown"
+        end
+    end
+    return "Unknown"
 end
 
 -- Регистрация пользователя
 local function registerUser(address, username)
-    users[address] = {
-        username = username,
-        lastSeen = os.time()
-    }
-    saveData()
+    local userFile = USERS_DIR .. address
+    local file = io.open(userFile, "w")
+    if file then
+        file:write(username)
+        file:close()
+        users[address] = username
+        return true
+    end
+    return false
 end
 
--- Получение адреса по имени пользователя
-local function getAddressByUsername(username)
-    for address, data in pairs(users) do
-        if data.username == username then
-            return address
+-- Загрузка пользователей
+local function loadUsers()
+    if fs.exists(USERS_DIR) then
+        local list = fs.list(USERS_DIR)
+        for filename in list do
+            local address = filename
+            local file = io.open(USERS_DIR .. filename, "r")
+            if file then
+                local username = file:read("*l")
+                file:close()
+                users[address] = username
+            end
         end
     end
-    return nil
 end
 
 -- Отправка сообщения
-local function sendMessage(toAddress, fromUsername, messageText, replyAddress)
-    messageCounter = messageCounter + 1
-    local messageId = messageCounter
+local function sendMessage(toAddress, fromAddress, message, messageId)
+    local encryptedMessage = encrypt(message, ENCRYPTION_KEY)
+    local fromUsername = getUsername(fromAddress)
     
-    local encryptedMessage = encrypt(messageText, "secret_key_" .. messageId)
-    
-    local messageData = {
+    modem.send(toAddress, PORT, "message", {
         id = messageId,
-        from = fromUsername,
-        text = encryptedMessage,
-        timestamp = os.time(),
-        delivered = false
-    }
-    
-    table.insert(messages, messageData)
-    saveData()
-    
-    -- Отправляем сообщение получателю
-    modem.send(toAddress, PORT, "message", messageId, fromUsername, encryptedMessage)
-    
-    -- Подтверждаем получение клиенту
-    if replyAddress then
-        modem.send(replyAddress, PORT, "sent", messageId)
-    end
-    
-    return messageId
+        from = fromAddress,
+        fromName = fromUsername,
+        content = encryptedMessage,
+        timestamp = os.time()
+    })
+end
+
+-- Отправка подтверждения получения
+local function sendAck(address, messageId)
+    modem.send(address, PORT, "ack", {id = messageId})
 end
 
 -- Обработка входящих сообщений
-local function handleMessage(_, _, fromAddress, _, _, messageType, ...)
-    if messageType == "register" then
-        local username = ...
-        registerUser(fromAddress, username)
-        modem.send(fromAddress, PORT, "registered")
-        
-    elseif messageType == "send" then
-        local toUsername, messageText = ...
-        local toAddress = getAddressByUsername(toUsername)
-        
-        if toAddress then
-            local fromData = users[fromAddress]
-            local messageId = sendMessage(toAddress, fromData.username, messageText, fromAddress)
-        else
-            modem.send(fromAddress, PORT, "error", "User not found")
-        end
-        
-    elseif messageType == "ack" then
-        local messageId = ...
-        -- Помечаем сообщение как доставленное
-        for _, msg in ipairs(messages) do
-            if msg.id == messageId then
-                msg.delivered = true
-                break
-            end
-        end
-        saveData()
-        
-    elseif messageType == "get_users" then
-        local userList = {}
-        for addr, data in pairs(users) do
-            table.insert(userList, {username = data.username, address = addr})
-        end
-        modem.send(fromAddress, PORT, "users_list", userList)
+local function handleMessage(senderAddress, recipientAddress, messageContent, messageId)
+    -- Сохраняем сообщение
+    table.insert(messages, {
+        id = messageId,
+        from = senderAddress,
+        to = recipientAddress,
+        content = messageContent,
+        timestamp = os.time(),
+        status = "sent"
+    })
+    
+    -- Отправляем сообщение получателю
+    if onlineUsers[recipientAddress] then
+        sendMessage(recipientAddress, senderAddress, messageContent, messageId)
+        return "delivered"
+    else
+        return "sent"
+    end
+end
+
+-- Обновление статуса онлайн
+local function updateUserStatus(address, status)
+    onlineUsers[address] = status
+end
+
+-- Вывод статистики
+local function printStats()
+    print("--- Server Statistics ---")
+    print("Online users: " .. tostring(table.size(onlineUsers)))
+    print("Total messages: " .. tostring(#messages))
+    print("Registered users: " .. tostring(table.size(users)))
+    print("\nOnline users:")
+    for address, _ in pairs(onlineUsers) do
+        print("  " .. address .. " (" .. getUsername(address) .. ")")
+    end
+    print("\nRecent messages:")
+    local count = 0
+    for i = #messages, 1, -1 do
+        if count >= 5 then break end
+        local msg = messages[i]
+        print("  [" .. msg.id .. "] " .. getUsername(msg.from) .. " -> " .. (users[msg.to] or msg.to) .. ": " .. msg.content:sub(1, 30) .. "...")
+        count = count + 1
     end
 end
 
 -- Основной цикл сервера
 local function startServer()
     modem.open(PORT)
-    loadData()
-    print("Telegram Server started on port " .. PORT)
+    loadUsers()
+    print("Telegram server started on port " .. PORT)
     print("Server ID: " .. SERVER_ID)
     
     while true do
-        local _, _, fromAddress, _, _, messageType = event.pull("modem_message")
-        handleMessage(_, _, fromAddress, _, _, messageType)
+        local _, _, sender, _, protocol, data = event.pull("modem_message")
+        
+        if protocol == "register" and type(data) == "table" then
+            local success = registerUser(sender, data.username)
+            modem.send(sender, PORT, "register_response", {success = success})
+            if success then
+                updateUserStatus(sender, true)
+                print("New user registered: " .. data.username .. " (" .. sender .. ")")
+            end
+            
+        elseif protocol == "message_request" and type(data) == "table" then
+            local messageId = generateMessageId()
+            local status = handleMessage(sender, data.to, data.content, messageId)
+            
+            -- Подтверждаем получение запроса
+            modem.send(sender, PORT, "message_status", {
+                originalId = data.id,
+                serverId = messageId,
+                status = status
+            })
+            
+        elseif protocol == "ping" then
+            modem.send(sender, PORT, "pong")
+            updateUserStatus(sender, true)
+            
+        elseif protocol == "disconnect" then
+            updateUserStatus(sender, false)
+            
+        elseif protocol == "get_users" then
+            modem.send(sender, PORT, "users_list", users)
+            
+        elseif protocol == "stats" then
+            printStats()
+        end
     end
 end
 
--- Статистика
-local function showStats()
-    print("=== Telegram Server Statistics ===")
-    print("Total Users: " .. #(users))
-    print("Total Messages: " .. #messages)
-    
-    print("\nUsers:")
-    for address, data in pairs(users) do
-        print("  " .. data.username .. " (" .. address:sub(1, 8) .. ")")
-    end
-    
-    print("\nRecent Messages:")
-    local count = 0
-    for i = #messages, 1, -1 do
-        if count >= 10 then break end
-        local msg = messages[i]
-        print(string.format("  [%d] %s -> %s (%s)", msg.id, msg.from, msg.text:sub(1, 20), msg.delivered and "Delivered" or "Pending"))
-        count = count + 1
-    end
-end
-
--- Команды сервера
-if ... == "stats" then
-    loadData()
-    showStats()
-else
-    startServer()
-end
+startServer()
