@@ -9,7 +9,7 @@ local PING_INTERVAL = 15 -- seconds
 local MAX_MESSAGE_HISTORY = 1000
 
 -- Global variables
-local clientName = "Anonymous"
+local clientName = nil
 local modemSide = nil
 local serverId = nil
 local serverName = nil
@@ -40,11 +40,29 @@ local colors = {
     unread = colors.yellow
 }
 
+-- Function to get default username from /.User directory
+local function getDefaultUsername()
+    local userDir = "/.User"
+    if fs.exists(userDir) and fs.isDir(userDir) then
+        local files = fs.list(userDir)
+        for _, file in ipairs(files) do
+            -- Check if folder starts with dot
+            if file:sub(1,1) == "." and fs.isDir(userDir .. "/" .. file) then
+                -- Return folder name without dot
+                return file:sub(2)
+            end
+        end
+    end
+    return nil
+end
+
 -- Parse command line arguments
 local args = {...}
+local explicitName = nil
+
 for i = 1, #args do
     if args[i] == "-n" or args[i] == "--name" then
-        clientName = args[i+1] or clientName
+        explicitName = args[i+1]
     elseif args[i] == "-m" or args[i] == "--modem" then
         modemSide = args[i+1]
     elseif args[i] == "-h" or args[i] == "--help" then
@@ -55,6 +73,55 @@ for i = 1, #args do
         print("  -h, --help           Show this help")
         return
     end
+end
+
+-- Determine client name
+if explicitName then
+    clientName = explicitName
+else
+    -- Try to get name from /.User folder
+    local defaultName = getDefaultUsername()
+    if defaultName then
+        clientName = defaultName
+    else
+        -- Interactive registration
+        term.clear()
+        term.setCursorPos(1, 1)
+        print("=== Messenger Client ===")
+        print()
+        print("No user profile found.")
+        print()
+        
+        -- Ask for username
+        while not clientName or clientName:len() < 1 or clientName:len() > 20 do
+            term.write("Enter your username (1-20 chars): ")
+            clientName = read()
+            
+            if clientName and clientName:len() > 0 and clientName:len() <= 20 then
+                -- Create user directory
+                local userDir = "/.User"
+                if not fs.exists(userDir) then
+                    fs.makeDir(userDir)
+                end
+                
+                -- Create hidden folder for this user
+                local userFolder = userDir .. "/." .. clientName
+                if not fs.exists(userFolder) then
+                    fs.makeDir(userFolder)
+                    print("User profile created!")
+                end
+                break
+            else
+                print("Invalid name. Must be 1-20 characters.")
+                clientName = nil
+            end
+        end
+    end
+end
+
+-- Fallback if no name set
+if not clientName or clientName == "" then
+    clientName = "Anonymous"
 end
 
 -- Utility functions
@@ -173,7 +240,7 @@ local function sendMessage(text)
         senderName = clientName,
         text = text,
         timestamp = os.time(),
-        local = true
+        isLocal = true
     }
     
     messages[selectedContact] = messages[selectedContact] or {}
@@ -242,11 +309,16 @@ local function drawSidebar()
         term.write("✗ Disconnected")
     end
     
-    term.setCursorPos(1, 4)
+    term.setCursorPos(1, 3)
+    term.setTextColor(colors.timestamp)
+    term.write("You: " .. clientName)
+    
+    term.setCursorPos(1, 5)
+    term.setTextColor(colors.text)
     term.write("---")
     
     -- Contacts list
-    local startY = 5
+    local startY = 6
     local i = 1
     
     for contactId, contact in pairs(contacts) do
@@ -334,7 +406,7 @@ local function drawChatArea()
         local msg = chatMessages[i]
         term.setCursorPos(sidebarWidth + 1, y)
         
-        if msg.senderId == serverId or msg.senderName == clientName then
+        if msg.senderId == serverId or msg.senderName == clientName or msg.isLocal then
             term.setTextColor(colors.highlight)
             term.write("You: ")
         else
@@ -439,6 +511,9 @@ local function drawHelp()
     term.write("Type text and press Enter")
     
     term.setCursorPos(1, 15)
+    term.write("User: " .. clientName)
+    
+    term.setCursorPos(1, 17)
     term.write("Press any key to continue...")
 end
 
@@ -543,6 +618,8 @@ local function main()
     
     -- Main event loop
     local lastPingTime = os.time()
+    term.clear()
+    drawUI()
     
     while true do
         -- Handle rednet messages
@@ -579,10 +656,19 @@ local function main()
             elseif key == 28 then -- Enter
                 if uiState.showHelp then
                     uiState.showHelp = false
-                elseif uiState.inputText ~= "" then
-                    sendMessage(uiState.inputText)
-                    uiState.inputText = ""
-                    uiState.inputCursor = 1
+                else
+                    -- If no contact selected, try to select first contact
+                    if not selectedContact and next(contacts) ~= nil then
+                        for contactId, _ in pairs(contacts) do
+                            selectedContact = contactId
+                            unreadCount[contactId] = 0
+                            break
+                        end
+                    elseif uiState.inputText ~= "" and selectedContact then
+                        sendMessage(uiState.inputText)
+                        uiState.inputText = ""
+                        uiState.inputCursor = 1
+                    end
                 end
                 
             elseif key == 14 then -- Backspace
@@ -598,8 +684,10 @@ local function main()
                 uiState.contactScroll = uiState.contactScroll + 1
                 
             elseif key == 201 then -- Page Up
-                uiState.messageScroll = math.min(#(messages[selectedContact] or {}), 
-                    uiState.messageScroll + 5)
+                if selectedContact then
+                    uiState.messageScroll = math.min(#(messages[selectedContact] or {}), 
+                        uiState.messageScroll + 5)
+                end
                 
             elseif key == 209 then -- Page Down
                 uiState.messageScroll = math.max(0, uiState.messageScroll - 5)
@@ -617,7 +705,7 @@ local function main()
             
             if x <= sidebarWidth then
                 -- Click in sidebar
-                local contactIndex = y - 4 + uiState.contactScroll
+                local contactIndex = y - 5 + uiState.contactScroll
                 local i = 1
                 for contactId, _ in pairs(contacts) do
                     if i == contactIndex then
