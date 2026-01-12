@@ -4,7 +4,6 @@ local modem = peripheral.find("modem") or error("No modem found")
 modem.open(os.getComputerID())
 
 local username = "Debugger"
-local contacts = {}
 local connected = false
 
 print("Debug Client v6 started.")
@@ -20,6 +19,7 @@ end
 
 -- Первый запрос
 sendHandshake()
+local timer_id = os.startTimer(3)
 
 while true do
     -- Ждем ЛЮБОЕ событие
@@ -31,8 +31,7 @@ while true do
                 print("SUCCESS: Connected to server! Status received.")
                 connected = true
             end
-            contacts = p4.users
-            print("Current online users: " .. table.concat(contacts, ", "))
+            print("Current online users: " .. table.concat(p4.users, ", "))
             
         elseif p4.type == "msg" then
             print("MESSAGE from " .. p4.from .. ": " .. p4.text)
@@ -44,8 +43,6 @@ while true do
              print("STATUS: Still waiting for server response...")
              sendHandshake() -- Повторяем запрос
         end
+        timer_id = os.startTimer(3) -- Перезапускаем таймер
     end
-    
-    -- Устанавливаем таймер для повторной попытки или проверки статуса
-    timer_id = os.startTimer(3)
 end
