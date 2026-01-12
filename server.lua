@@ -1,27 +1,29 @@
--- Сервер мессенджера для CC:Tweaked
+-- Messenger Server for CC:Tweaked
 local VERSION = "1.0"
 local PORT = 7777
 local MAX_CLIENTS = 20
 local MODEM_SIDE = "back"
 
--- Инициализация
-print("=== Сервер мессенджера v" .. VERSION .. " ===")
-print("Загрузка...")
+-- Initialization
+print("=== Messenger Server v" .. VERSION .. " ===")
+print("Loading...")
 
 local modem = peripheral.find("modem")
 if not modem then
-    error("Не найден модем!")
+    print("ERROR: Modem not found!")
+    print("Please attach a wireless modem")
+    return
 end
 
 rednet.open(MODEM_SIDE)
-print("Модем открыт на порту " .. PORT)
+print("Modem opened on side: " .. MODEM_SIDE)
 
--- Структуры данных
+-- Data structures
 local clients = {} -- id -> {name, lastSeen}
-local messages = {} -- очередь сообщений id -> массив сообщений
-local messageHistory = {} -- история всех сообщений
+local messages = {} -- queue: id -> array of messages
+local messageHistory = {} -- all messages
 
--- Функции
+-- Functions
 function saveData()
     local data = {
         clients = clients,
@@ -31,7 +33,7 @@ function saveData()
     local file = fs.open("server_data.dat", "w")
     file.write(textutils.serialize(data))
     file.close()
-    print("Данные сохранены")
+    print("Data saved")
 end
 
 function loadData()
@@ -43,14 +45,14 @@ function loadData()
         if data then
             clients = data.clients or clients
             messages = data.messages or messages
-            print("Данные загружены")
+            print("Data loaded")
         end
     end
 end
 
 function registerClient(clientId, clientName)
     if not clients[clientId] then
-        print("Новый клиент: " .. clientName .. " (" .. clientId .. ")")
+        print("New client: " .. clientName .. " (" .. clientId .. ")")
     end
     
     clients[clientId] = {
@@ -59,7 +61,6 @@ function registerClient(clientId, clientName)
         online = true
     }
     
-    -- Создаем очередь сообщений если нет
     if not messages[clientId] then
         messages[clientId] = {}
     end
@@ -68,9 +69,8 @@ function registerClient(clientId, clientName)
 end
 
 function sendMessage(senderId, targetId, message, senderName)
-    -- Проверяем существование цели
     if not clients[targetId] then
-        return false, "Клиент не найден"
+        return false, "Client not found"
     end
     
     local msg = {
@@ -83,26 +83,22 @@ function sendMessage(senderId, targetId, message, senderName)
         delivered = false
     }
     
-    -- Добавляем в историю
     table.insert(messageHistory, msg)
-    
-    -- Добавляем в очередь получателя
     table.insert(messages[targetId], msg)
     
-    print("Сообщение от " .. senderName .. " для " .. clients[targetId].name)
+    print("Message from " .. senderName .. " to " .. clients[targetId].name)
     
-    -- Автосохранение каждые 10 сообщений
     if #messageHistory % 10 == 0 then
         saveData()
     end
     
-    return true, "Сообщение отправлено"
+    return true, "Message sent"
 end
 
 function getOnlineClients()
     local online = {}
     for id, client in pairs(clients) do
-        if client.online and os.epoch("utc") - client.lastSeen < 30000 then -- 30 секунд
+        if client.online and os.epoch("utc") - client.lastSeen < 30000 then
             table.insert(online, {
                 id = id,
                 name = client.name
@@ -116,12 +112,10 @@ function getClientMessages(clientId)
     local clientMsgs = messages[clientId] or {}
     local result = {}
     
-    -- Берем последние 50 сообщений
     for i = math.max(1, #clientMsgs - 49), #clientMsgs do
         table.insert(result, clientMsgs[i])
     end
     
-    -- Помечаем как доставленные
     for _, msg in ipairs(clientMsgs) do
         msg.delivered = true
     end
@@ -135,7 +129,7 @@ function processRequest(senderId, request)
         return {
             type = "register_response",
             success = success,
-            message = success and "Регистрация успешна" or "Ошибка регистрации"
+            message = success and "Registration successful" or "Registration failed"
         }
         
     elseif request.type == "send_message" then
@@ -161,7 +155,6 @@ function processRequest(senderId, request)
         }
         
     elseif request.type == "ping" then
-        -- Обновляем время последней активности
         if clients[senderId] then
             clients[senderId].lastSeen = os.epoch("utc")
             clients[senderId].online = true
@@ -180,7 +173,7 @@ function processRequest(senderId, request)
     
     return {
         type = "error",
-        message = "Неизвестный тип запроса"
+        message = "Unknown request type"
     }
 end
 
@@ -189,14 +182,14 @@ function cleanupOldClients()
     local removed = 0
     
     for id, client in pairs(clients) do
-        if now - client.lastSeen > 300000 then -- 5 минут
+        if now - client.lastSeen > 300000 then
             client.online = false
             removed = removed + 1
         end
     end
     
     if removed > 0 then
-        print("Оффлайн клиентов: " .. removed)
+        print("Offline clients: " .. removed)
     end
 end
 
@@ -226,16 +219,16 @@ end
 
 function displayStats()
     local stats = serverStats()
-    print(string.format("Статистика: %d/%d онлайн | %d в очереди | %d сообщений",
+    print(string.format("Stats: %d/%d online | %d pending | %d messages",
         stats.online, stats.total, stats.pending, stats.totalMessages))
 end
 
--- Основной цикл сервера
+-- Main server loop
 function main()
     loadData()
     
-    print("Сервер запущен. ID: " .. os.getComputerID())
-    print("Ожидание подключений...")
+    print("Server started. ID: " .. os.getComputerID())
+    print("Waiting for connections...")
     
     while true do
         local senderId, request, protocol = rednet.receive(nil, 2)
@@ -247,7 +240,6 @@ function main()
             end
         end
         
-        -- Периодические задачи
         local timer = os.startTimer(10)
         local event = os.pullEvent()
         
@@ -255,7 +247,6 @@ function main()
             cleanupOldClients()
             displayStats()
             
-            -- Автосохранение каждую минуту
             if os.epoch("utc") % 60000 < 100 then
                 saveData()
             end
@@ -263,12 +254,12 @@ function main()
     end
 end
 
--- Обработка ошибок
+-- Error handling
 local ok, err = pcall(main)
 if not ok then
-    print("Ошибка сервера: " .. err)
+    print("Server error: " .. err)
     saveData()
 end
 
 rednet.close()
-print("Сервер остановлен")
+print("Server stopped")
