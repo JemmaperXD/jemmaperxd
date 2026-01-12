@@ -2,9 +2,10 @@ local PORT = 1384
 local modem = peripheral.find("modem") or error("No modem found")
 modem.open(PORT)
 
-local users = {} -- [id] = name
+local users = {}
+local logs = {}
 
--- Функция шифрования (Ключ 7, чтобы клиент смог расшифровать)
+-- Функция шифрования (Ключ 7)
 local function encrypt(text, key)
     local res = ""
     for i = 1, #text do
@@ -13,47 +14,51 @@ local function encrypt(text, key)
     return res
 end
 
-print("=== SERVER STARTED ===")
+print("=== SERVER STARTED (DEBUG MODE) ===")
 print("My ID: " .. os.getComputerID())
-print("Waiting for clients...")
+print("Listening on PORT: " .. PORT)
+print(string.rep("-", 40))
 
 while true do
-    local _, _, channel, replyID, msg = os.pullEvent("modem_message")
-    
-    if type(msg) == "table" and channel == PORT then
-        -- Логируем в консоль для проверки
-        print("Got " .. tostring(msg.type) .. " from ID " .. replyID)
+    -- Ждем ЛЮБОЕ событие
+    local event, p1, p2, p3, p4 = os.pullEvent()
 
-        if msg.type == "handshake" or msg.type == "ping" then
-            users[replyID] = msg.user or "Unknown"
-            
-            local names = {}
-            for _, name in pairs(users) do table.insert(names, name) end
-            
-            -- Шлем ответ прямо отправителю
-            modem.transmit(replyID, PORT, {
-                type = "status",
-                users = names
-            })
+    if event == "modem_message" then
+        local channel, replyID, msg = p1, p2, p4 -- p1, p2, p3, p4 изменен на channel, replyID, _, msg для ясности
 
-        elseif msg.type == "send" then
-            local targetID = nil
-            for id, name in pairs(users) do
-                if name == msg.to then targetID = id break end
-            end
-
-            if targetID then
-                -- ШИФРУЕМ сообщение перед пересылкой (Ключ 7)
-                local encrypted_msg = encrypt(msg.text, 7)
+        -- Дебаг в консоль
+        print("Received event on channel " .. channel .. " from ID " .. replyID)
+        print("Message Type: " .. (type(msg) == "table" and tostring(msg.type) or "Not a table"))
+        
+        if type(msg) == "table" and channel == PORT then
+            if msg.type == "handshake" or msg.type == "ping" then
+                users[replyID] = msg.user or "Unknown"
                 
-                modem.transmit(targetID, PORT, {
-                    type = "msg",
-                    from = msg.user,
-                    text = encrypted_msg
+                local names = {}
+                for _, name in pairs(users) do table.insert(names, name) end
+                
+                -- Отправляем ответ, который ЖДЕТ клиент
+                modem.transmit(replyID, PORT, {
+                    type = "status",
+                    users = names
                 })
-                print("Msg: " .. msg.user .. " -> " .. msg.to .. " (Encrypted)")
-            else
-                print("Error: Target " .. tostring(msg.to) .. " not found!")
+                print("-> Sent STATUS reply to " .. replyID)
+
+            elseif msg.type == "send" then
+                local targetID = nil
+                for id, name in pairs(users) do
+                    if name == msg.to then targetID = id break end
+                end
+
+                if targetID then
+                    local encrypted_msg = encrypt(msg.text, 7)
+                    modem.transmit(targetID, PORT, {
+                        type = "msg",
+                        from = msg.user,
+                        text = encrypted_msg
+                    })
+                    print("-> Forwarded MSG to " .. msg.to)
+                end
             end
         end
     end
