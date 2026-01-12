@@ -1,512 +1,390 @@
--- ameOs v46.0 [TOTAL CLOCK & NAVIGATION FIX]
-local w, h = term.getSize()
-local CONFIG_DIR, SETTINGS_PATH = "/.config", "/.config/ame_settings.cfg"
-local running = true
-local activeTab = "HOME"
-local currentPath = "/"
-local clipboard = { path = nil }
-local globalTimer = nil
+-- Messenger Server for CC:Tweaked
+local VERSION = "1.0"
+local PORT = 7777
+local MAX_CLIENTS = 20
 
-local themes = {
-    { name = "Dark Moss", bg = colors.black, accent = colors.green, text = colors.gray },
-    { name = "Abyss",     bg = colors.black, accent = colors.cyan, text = colors.gray },
-    { name = "Charcoal",  bg = colors.black, accent = colors.gray, text = colors.lightGray },
-    { name = "Slate",     bg = colors.black, accent = colors.lightGray, text = colors.gray }
-}
-local settings = { themeIndex = 1, user = "User", pass = "", isRegistered = false }
+-- Parse command line arguments
+local args = {...}
+local serverName = nil
+local modemSide = nil
 
-local topWin = window.create(term.current(), 1, 1, w, 1)
-local mainWin = window.create(term.current(), 1, 2, w, h - 2)
-local taskWin = window.create(term.current(), 1, h, w, 1)
-
--- 1. SYSTEM UTILS
-if not fs.exists(CONFIG_DIR) then fs.makeDir(CONFIG_DIR) end
-local function getHomeDir() return fs.combine("/.User", "." .. settings.user) end
-
-local function saveSettings()
-    local f = fs.open(SETTINGS_PATH, "w")
-    f.write(textutils.serialize(settings))
-    f.close()
-end
-
-local function loadSettings()
-    if fs.exists(SETTINGS_PATH) then
-        local f = fs.open(SETTINGS_PATH, "r")
-        local data = f.readAll() f.close()
-        local decoded = textutils.unserialize(data or "")
-        if type(decoded) == "table" then 
-            settings = decoded 
-            if settings.themeIndex > #themes then
-                settings.themeIndex = 1
-            end
+for i = 1, #args do
+    local arg = args[i]
+    if arg == "-n" or arg == "--name" then
+        serverName = args[i + 1]
+    elseif arg == "-s" or arg == "--side" then
+        modemSide = args[i + 1]
+    elseif arg == "-h" or arg == "--help" then
+        print("Usage: server [options]")
+        print("Options:")
+        print("  -n, --name <name>    Set server display name")
+        print("  -s, --side <side>    Specify modem side (left/right/top/bottom/back/front)")
+        print("  -h, --help           Show this help message")
+        print("  -i, --id <id>        Specify custom server ID")
+        return
+    elseif arg == "-i" or arg == "--id" then
+        local customId = tonumber(args[i + 1])
+        if customId then
+            -- In CC:Tweaked, we can't change computer ID, but we can use it as display
+            print("Note: Computer ID is fixed, using " .. customId .. " as display only")
         end
     end
 end
 
-local function getUniquePath(dir, name)
-    local path = fs.combine(dir, name)
-    if not fs.exists(path) then return path end
-    
-    local ext = ""
-    local base = name
-    local dotPos = name:find("%.[^%.]*$")
-    if dotPos then
-        base = name:sub(1, dotPos-1)
-        ext = name:sub(dotPos)
-    end
-    
-    local counter = 1
-    repeat
-        path = fs.combine(dir, base .. "(" .. counter .. ")" .. ext)
-        counter = counter + 1
-    until not fs.exists(path)
-    return path
-end
+-- Initialization
+print("=== Messenger Server v" .. VERSION .. " ===")
+print("Loading...")
 
-local function normalizePath(path)
-    if path == "" or path == nil then
-        return "/"
-    end
-    path = path:gsub("//+", "/")
-    if path:sub(1, 1) ~= "/" then
-        path = "/" .. path
-    end
-    return path
-end
-
--- 2. БЕЗОПАСНАЯ БУТ АНИМАЦИЯ (с автоперезапуском)
-local function safeBootAnim()
-    while true do
-        local success, error = pcall(function()
-            local cx, cy = math.floor(w/2), math.floor(h/2 - 2)
-            local duration = 5
-            local start = os.clock()
-            local angle = 0
-            while os.clock() - start < duration do
-                local elapsed = os.clock() - start
-                term.setBackgroundColor(colors.black)
-                term.clear()
-                local fusion = 1.0
-                if elapsed > (duration - 2) then fusion = math.max(0, 1 - (elapsed - (duration - 2)) / 2) end
-                term.setTextColor(colors.cyan)
-                local rX, rY = 2.5 * fusion, 1.5 * fusion
-                for i = 1, 3 do
-                    local a = angle + (i * 2.1)
-                    term.setCursorPos(cx + math.floor(math.cos(a)*rX+0.5), cy + math.floor(math.sin(a)*rY+0.5))
-                    term.write("o")
-                end
-                term.setCursorPos(cx - 2, h - 1)
-                term.setTextColor(colors.white)
-                term.write("ameOS")
-                angle = angle + 0.4
-                sleep(0.05)
-            end
-            return true -- Успешное завершение
-        end)
-        
-        if success then
-            break -- Анимация завершена успешно
-        end
-        -- Если произошла ошибка (Ctrl+T), просто продолжаем цикл - анимация начнется заново
-        -- Никаких сообщений, просто мгновенный перезапуск
-    end
-end
-
--- 3. RENDERING
-local function drawTopBar()
-    local theme = themes[settings.themeIndex]
-    local old = term.redirect(topWin)
-    topWin.setCursorBlink(false)
-    topWin.setBackgroundColor(theme.accent)
-    topWin.setTextColor(theme.text)
-    topWin.clear()
-    topWin.setCursorPos(2, 1) topWin.write("ameOs | " .. activeTab)
-    topWin.setCursorPos(w - 6, 1)
-    topWin.write(textutils.formatTime(os.time(), true))
-    term.redirect(old)
-end
-
-local function drawUI()
-    local theme = themes[settings.themeIndex]
-    taskWin.setBackgroundColor(colors.black)
-    taskWin.clear()
-    taskWin.setCursorBlink(false)
-    local tabs = { {n="HOME", x=1}, {n="FILE", x=8}, {n="SHLL", x=15}, {n="CONF", x=22} }
-    for _, t in ipairs(tabs) do
-        taskWin.setCursorPos(t.x, 1)
-        taskWin.setBackgroundColor(activeTab == t.n and theme.accent or colors.black)
-        taskWin.setTextColor(activeTab == t.n and theme.text or colors.white)
-        taskWin.write(" "..t.n.." ")
-    end
-    drawTopBar()
-    mainWin.setBackgroundColor(theme.bg)
-    mainWin.setTextColor(theme.text)
-    mainWin.clear()
+-- Function to find wireless modem
+function findWirelessModem(specifiedSide)
+    print("Searching for wireless modem...")
     
-    if activeTab == "HOME" then
-        local home = getHomeDir()
-        if not fs.exists(home) then fs.makeDir(home) end
-        local files = fs.list(home)
-        for i, n in ipairs(files) do
-            local col, row = ((i-1)%4)*12+3, math.floor((i-1)/4)*4+1
-            mainWin.setCursorPos(col, row)
-            mainWin.setTextColor(fs.isDir(fs.combine(home, n)) and colors.yellow or colors.blue)
-            mainWin.write("[#]")
-            mainWin.setCursorPos(col-1, row+1)
-            mainWin.setTextColor(colors.white)
-            mainWin.write(n:sub(1, 8))
-        end
-    elseif activeTab == "FILE" then
-        mainWin.setCursorPos(1, 1) mainWin.setTextColor(colors.yellow)
-        mainWin.write(" "..normalizePath(currentPath))
-        local files = fs.list(currentPath)
-        if currentPath ~= "/" then table.insert(files, 1, "..") end
-        for i, n in ipairs(files) do
-            if i > h-4 then break end
-            mainWin.setCursorPos(1, i+1)
-            mainWin.setTextColor(fs.isDir(fs.combine(currentPath, n)) and colors.cyan or colors.white)
-            mainWin.write("> "..n)
-        end
-    elseif activeTab == "CONF" then
-        mainWin.setCursorPos(1, 2) mainWin.write(" Theme: "..theme.name)
-        mainWin.setCursorPos(1, 4) mainWin.write(" [ NEXT THEME ]")
-        mainWin.setCursorPos(1, 6) mainWin.setTextColor(colors.yellow)
-        mainWin.write(" [ UPDATE SYSTEM ]")
-        mainWin.setCursorPos(1, 8) mainWin.setTextColor(theme.text)
-        mainWin.write(" [ SHUTDOWN ]")
-    end
-end
-
--- 4. CONTEXT MENU
-local function showContext(mx, my, file)
-    local opts = file and {"Copy", "Rename", "Delete"} or {"New File", "New Folder", "Paste"}
-    local menuWin = window.create(term.current(), mx, my, 12, #opts)
-    menuWin.setBackgroundColor(colors.gray)
-    menuWin.setTextColor(colors.white)
-    menuWin.clear()
-    menuWin.setCursorBlink(false)
-    for i, o in ipairs(opts) do menuWin.setCursorPos(1, i) menuWin.write(" "..o) end
-    
-    local contextTimer = os.startTimer(1)
-    local contextRunning = true
-    
-    while contextRunning do
-        local ev, p1, p2, p3 = os.pullEvent()
-        
-        if ev == "timer" and (p1 == globalTimer or p1 == contextTimer) then
-            if p1 == globalTimer then
-                drawTopBar()
-                globalTimer = os.startTimer(1)
-            end
-            if p1 == contextTimer then
-                drawTopBar()
-                contextTimer = os.startTimer(1)
-            end
-        
-        elseif ev == "mouse_click" then
-            local btn, cx, cy = p1, p2, p3
-            if cx >= mx and cx < mx+12 and cy >= my and cy < my+#opts then
-                local choice = opts[cy-my+1]
-                local path = (activeTab == "HOME") and getHomeDir() or currentPath
-                
-                if choice == "New File" then 
-                    mainWin.setCursorPos(1,1)
-                    mainWin.write("Name: ") 
-                    local n = read() 
-                    if n~="" then 
-                        local f = fs.open(getUniquePath(path, n), "w")
-                        if f then f.close() end
-                    end
-                elseif choice == "New Folder" then 
-                    mainWin.setCursorPos(1,1)
-                    mainWin.write("Dir: ") 
-                    local n = read() 
-                    if n~="" then fs.makeDir(getUniquePath(path, n)) end
-                elseif choice == "Delete" then 
-                    fs.delete(fs.combine(path, file))
-                elseif choice == "Rename" then 
-                    mainWin.setCursorPos(1,1)
-                    mainWin.write("New: ") 
-                    local n = read() 
-                    if n~="" then 
-                        local newPath = getUniquePath(path, n)
-                        fs.move(fs.combine(path, file), newPath)
-                    end
-                elseif choice == "Copy" then 
-                    clipboard.path = fs.combine(path, file)
-                elseif choice == "Paste" and clipboard.path then 
-                    local newName = fs.getName(clipboard.path)
-                    local destPath = getUniquePath(path, newName)
-                    fs.copy(clipboard.path, destPath)
-                end
-                contextRunning = false
-            else
-                contextRunning = false
-            end
-        end
-    end
-    
-    if contextTimer then
-        os.cancelTimer(contextTimer)
-    end
-    
-    drawUI()
-end
-
--- 5. ENGINE
-local function osEngine()
-    drawUI()
-    globalTimer = os.startTimer(1)
-    
-    while running do
-        local ev, p1, p2, p3 = os.pullEvent()
-        
-        if ev == "timer" and p1 == globalTimer then
-            drawTopBar()
-            globalTimer = os.startTimer(1)
-        
-        elseif ev == "mouse_click" then
-            local btn, x, y = p1, p2, p3
-            if y == h then
-                if x >= 1 and x <= 6 then activeTab = "HOME"
-                elseif x >= 8 and x <= 13 then activeTab = "FILE"
-                elseif x >= 15 and x <= 20 then activeTab = "SHLL"
-                elseif x >= 22 and x <= 27 then activeTab = "CONF" end
-                
-                if activeTab == "SHLL" then
-                    drawUI()
-                    local old = term.redirect(mainWin)
-                    term.setBackgroundColor(colors.black) term.clear() term.setCursorPos(1,1)
-                    term.setCursorBlink(true)
-                    parallel.waitForAny(
-                        function() shell.run("shell") end,
-                        function()
-                            local lt = os.startTimer(1)
-                            while true do
-                                local e, id, tx, ty = os.pullEvent()
-                                if e == "timer" and id == lt then drawTopBar() lt = os.startTimer(1)
-                                elseif e == "mouse_click" and ty == h then os.queueEvent("mouse_click", 1, tx, ty) return end
-                            end
-                        end
-                    )
-                    term.setCursorBlink(false) term.redirect(old)
-                    activeTab = "HOME"
-                end
-                os.cancelTimer(globalTimer)
-                globalTimer = os.startTimer(0.1)
-                drawUI()
-            elseif activeTab == "FILE" and y > 1 and y < h then
-                local fList = fs.list(currentPath)
-                if currentPath ~= "/" then table.insert(fList, 1, "..") end
-                local sel = fList[y-2]
-                if btn == 2 then 
-                    showContext(x, y, sel)
-                elseif sel then
-                    local p = fs.combine(currentPath, sel)
-                    if fs.isDir(p) then 
-                        currentPath = normalizePath(p)
-                        drawUI()
-                    else 
-                        local old = term.redirect(mainWin) 
-                        term.setCursorBlink(true) 
-                        shell.run("edit", p) 
-                        term.setCursorBlink(false) 
-                        term.redirect(old) 
-                        drawUI() 
-                    end
-                end
-            elseif activeTab == "HOME" and y > 1 and y < h then
-                local home = getHomeDir()
-                local fList = fs.list(home)
-                local sel = nil
-                for i, n in ipairs(fList) do
-                    local col, row = ((i-1)%4)*12+3, math.floor((i-1)/4)*4+2
-                    if x >= col and x <= col+6 and y >= row and y <= row+1 then sel = n break end
-                end
-                if btn == 2 then 
-                    showContext(x, y, sel)
-                elseif sel then 
-                    local p = fs.combine(home, sel)
-                    if fs.isDir(p) then 
-                        activeTab = "FILE" 
-                        currentPath = normalizePath(p)
-                        drawUI()
-                    else 
-                        local old = term.redirect(mainWin) 
-                        term.setCursorBlink(true) 
-                        shell.run("edit", p) 
-                        term.setCursorBlink(false) 
-                        term.redirect(old) 
-                        drawUI() 
-                    end
-                end
-            elseif activeTab == "CONF" then
-                if y == 5 then 
-                    settings.themeIndex = (settings.themeIndex % #themes) + 1 
-                    saveSettings() 
-                    drawUI()
-                elseif y == 7 then 
-                    -- ОБНОВЛЕНИЕ СИСТЕМЫ - ИСПРАВЛЕННАЯ ВЕРСИЯ
-                    mainWin.clear() 
-                    mainWin.setCursorPos(1,1) 
-                    mainWin.setTextColor(colors.yellow)
-                    mainWin.write("Updating system...")
-                    
-                    -- Создаем временный файл для загрузки
-                    local tempFile = "startup_temp.lua"
-                    local finalFile = "startup.lua"
-                    local url = "https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua"
-                    
-                    -- Пытаемся скачать обновление несколько раз
-                    local downloadSuccess = false
-                    for attempt = 1, 3 do
-                        mainWin.setCursorPos(1, 2)
-                        mainWin.write("Attempt " .. attempt .. "/3...")
-                        
-                        -- Удаляем старый временный файл если существует
-                        if fs.exists(tempFile) then
-                            fs.delete(tempFile)
-                        end
-                        
-                        -- Пытаемся скачать
-                        if shell.run("wget", url, tempFile) then
-                            if fs.exists(tempFile) then
-                                -- Проверяем что файл не пустой
-                                local file = fs.open(tempFile, "r")
-                                if file then
-                                    local content = file.readAll()
-                                    file.close()
-                                    if content and #content > 100 then  -- Минимальный размер файла
-                                        downloadSuccess = true
-                                        break
-                                    end
-                                end
-                            end
-                        end
-                        
-                        if attempt < 3 then
-                            sleep(2)  -- Ждем перед повторной попыткой
-                        end
-                    end
-                    
-                    if downloadSuccess then
-                        -- Удаляем старый startup.lua если существует
-                        if fs.exists(finalFile) then
-                            fs.delete(finalFile)
-                        end
-                        
-                        -- Переименовываем временный файл в startup.lua
-                        fs.move(tempFile, finalFile)
-                        
-                        mainWin.setCursorPos(1, 3)
-                        mainWin.setTextColor(colors.lime)
-                        mainWin.write("Update successful! Rebooting...")
-                        sleep(2)
-                        
-                        -- Перезагружаем систему
-                        os.reboot()
-                    else
-                        -- Удаляем временный файл если он существует
-                        if fs.exists(tempFile) then
-                            fs.delete(tempFile)
-                        end
-                        
-                        mainWin.setCursorPos(1, 3)
-                        mainWin.setTextColor(colors.red)
-                        mainWin.write("Update failed! Check connection.")
-                        sleep(3)
-                        drawUI()
-                    end
-                elseif y == 9 then 
-                    running = false 
-                end
-            end
-        end
-    end
-end
-
--- 6. ENTRY POINT - С АВТОПЕРЕЗАПУСКОМ
-local function safeStartup()
-    while true do
-        -- Загрузка настроек вне pcall, чтобы если они сломаны - всё равно перезапускалось
-        loadSettings()
-        term.setBackgroundColor(colors.black)
-        term.clear()
-        
-        -- Безопасная загрузочная анимация с автоперезапуском
-        safeBootAnim()
-        
-        -- Безопасный экран входа с автоперезапуском
-        local loginComplete = false
-        
-        while not loginComplete do
-            local success, result = pcall(function()
-                if not settings.isRegistered then
-                    term.setCursorBlink(true)
-                    term.setCursorPos(w/2-6, h/2-2) term.setTextColor(colors.cyan) term.write("REGISTRATION")
-                    term.setCursorPos(w/2-8, h/2) term.setTextColor(colors.white) term.write("User: ") 
-                    
-                    settings.user = read()
-                    
-                    term.setCursorPos(w/2-8, h/2+1) term.write("Pass: ") 
-                    settings.pass = read("*")
-                    
-                    settings.isRegistered = true 
-                    saveSettings()
-                    term.setCursorBlink(false)
-                    return "registered"
-                else
-                    local loginAttempts = 0
-                    
-                    while true do
-                        term.setCursorBlink(true)
-                        term.clear()
-                        term.setCursorPos(w/2-6, h/2-1) term.setTextColor(colors.cyan) term.write("LOGIN: "..settings.user)
-                        term.setCursorPos(w/2-8, h/2+1) term.setTextColor(colors.white) term.write("Pass: ")
-                        
-                        local password = read("*")
-                        
-                        if password == settings.pass then 
-                            term.setCursorBlink(false)
-                            return "login_success"
-                        else
-                            loginAttempts = loginAttempts + 1
-                            term.setCursorPos(w/2-8, h/2+3)
-                            term.setTextColor(colors.red)
-                            term.write("Wrong password! Try: " .. loginAttempts)
-                            sleep(1.5)
-                        end
-                    end
-                end
-            end)
-            
-            if success and (result == "registered" or result == "login_success") then
-                loginComplete = true
-                break
-            end
-            -- Если произошла ошибка (Ctrl+T), просто продолжаем цикл - экран входа перезапустится
-            -- Никаких сообщений, никаких задержек
-        end
-        
-        -- Если дошли сюда, значит успешно вошли в систему
-        -- Запускаем основную ОС (она тоже будет в бесконечном цикле)
-        local osSuccess, osError = pcall(osEngine)
-        
-        -- Если ОС завершилась (например, через shutdown) или упала, перезапускаем всё
-        if not osSuccess then
-            -- Если ОС упала с ошибкой, просто продолжаем внешний цикл - всё перезапустится
-            -- Можно добавить небольшую задержку, чтобы не зациклиться мгновенно
-            sleep(0.1)
-        elseif osError == "restart" then
-            -- Если ОС запросила перезагрузку
-            sleep(0.1)
-            -- continue loop
+    if specifiedSide then
+        -- Check specified side first
+        local modem = peripheral.wrap(specifiedSide)
+        if modem and modem.isWireless and modem.isWireless() then
+            print("Using specified modem on side: " .. specifiedSide)
+            return specifiedSide
         else
-            -- Нормальное завершение
+            print("Warning: No wireless modem found on specified side: " .. specifiedSide)
+        end
+    end
+    
+    -- Get all peripherals
+    local sides = peripheral.getNames()
+    
+    for _, side in ipairs(sides) do
+        local type = peripheral.getType(side)
+        if type == "modem" then
+            -- Check if it's a wireless modem
+            local modem = peripheral.wrap(side)
+            if modem and modem.isWireless and modem.isWireless() then
+                print("Found wireless modem on side: " .. side)
+                return side
+            end
+        end
+    end
+    
+    -- If not found, list available peripherals
+    print("No wireless modem found!")
+    print("Available peripherals:")
+    for _, side in ipairs(sides) do
+        print("  " .. side .. " - " .. peripheral.getType(side))
+    end
+    
+    -- Ask user to specify side
+    print("\nPlease enter modem side (left, right, top, bottom, back, front):")
+    local input = read()
+    
+    if input then
+        -- Check if this side has a modem
+        local modem = peripheral.wrap(input)
+        if modem and modem.isWireless and modem.isWireless() then
+            print("Using modem on side: " .. input)
+            return input
+        else
+            print("Error: No wireless modem found on side: " .. input)
+        end
+    end
+    
+    return nil
+end
+
+-- Find and open modem
+local MODEM_SIDE = findWirelessModem(modemSide)
+if not MODEM_SIDE then
+    print("ERROR: Could not find wireless modem!")
+    print("Please attach a wireless modem and try again")
+    return
+end
+
+local modem = peripheral.wrap(MODEM_SIDE)
+if not modem then
+    print("ERROR: Cannot access modem on side: " .. MODEM_SIDE)
+    return
+end
+
+rednet.open(MODEM_SIDE)
+print("Modem opened successfully on side: " .. MODEM_SIDE)
+
+-- Set server name
+local SERVER_DISPLAY_NAME = serverName or os.getComputerLabel() or "Server" .. os.getComputerID()
+print("Server display name: " .. SERVER_DISPLAY_NAME)
+print("Server computer ID: " .. os.getComputerID())
+
+-- Data structures
+local clients = {}
+local messages = {}
+local messageHistory = {}
+
+-- Functions
+function saveData()
+    local data = {
+        clients = clients,
+        messages = messages,
+        serverName = SERVER_DISPLAY_NAME
+    }
+    
+    local file = fs.open("server_data.dat", "w")
+    if file then
+        file.write(textutils.serialize(data))
+        file.close()
+        print("Data saved")
+    end
+end
+
+function loadData()
+    if fs.exists("server_data.dat") then
+        local file = fs.open("server_data.dat", "r")
+        if file then
+            local data = textutils.unserialize(file.readAll())
+            file.close()
+            
+            if data then
+                clients = data.clients or clients
+                messages = data.messages or messages
+                SERVER_DISPLAY_NAME = data.serverName or SERVER_DISPLAY_NAME
+                print("Data loaded: " .. #messageHistory .. " messages, " .. countTable(clients) .. " clients")
+                print("Server name: " .. SERVER_DISPLAY_NAME)
+            end
+        end
+    end
+end
+
+function countTable(tbl)
+    local count = 0
+    for _ in pairs(tbl) do
+        count = count + 1
+    end
+    return count
+end
+
+function registerClient(clientId, clientName)
+    if not clients[clientId] then
+        print("New client registered: " .. clientName .. " (ID: " .. clientId .. ")")
+    else
+        print("Client reconnected: " .. clientName .. " (ID: " .. clientId .. ")")
+    end
+    
+    clients[clientId] = {
+        name = clientName,
+        lastSeen = os.epoch("utc"),
+        online = true
+    }
+    
+    if not messages[clientId] then
+        messages[clientId] = {}
+    end
+    
+    return true
+end
+
+function sendMessage(senderId, targetId, message, senderName)
+    if not clients[targetId] then
+        return false, "Client not found"
+    end
+    
+    local msg = {
+        id = #messageHistory + 1,
+        sender = senderId,
+        senderName = senderName,
+        target = targetId,
+        message = message,
+        time = os.epoch("utc"),
+        delivered = false
+    }
+    
+    table.insert(messageHistory, msg)
+    table.insert(messages[targetId], msg)
+    
+    print("[" .. os.date("%H:%M:%S") .. "] Message from " .. senderName .. 
+          " (" .. senderId .. ") to " .. clients[targetId].name .. 
+          " (" .. targetId .. "): " .. string.sub(message, 1, 20) .. (#message > 20 and "..." or ""))
+    
+    if #messageHistory % 10 == 0 then
+        saveData()
+    end
+    
+    return true, "Message sent"
+end
+
+function getOnlineClients()
+    local online = {}
+    for id, client in pairs(clients) do
+        if client.online and os.epoch("utc") - client.lastSeen < 30000 then
+            table.insert(online, {
+                id = id,
+                name = client.name
+            })
+        end
+    end
+    return online
+end
+
+function getClientMessages(clientId)
+    local clientMsgs = messages[clientId] or {}
+    local result = {}
+    
+    for i = math.max(1, #clientMsgs - 49), #clientMsgs do
+        table.insert(result, clientMsgs[i])
+    end
+    
+    for _, msg in ipairs(clientMsgs) do
+        msg.delivered = true
+    end
+    
+    return result
+end
+
+function processRequest(senderId, request)
+    if request.type == "register" then
+        local success = registerClient(senderId, request.name)
+        return {
+            type = "register_response",
+            success = success,
+            serverName = SERVER_DISPLAY_NAME,
+            message = success and "OK" or "ERROR"
+        }
+        
+    elseif request.type == "send_message" then
+        local success, err = sendMessage(senderId, request.target, 
+                                        request.message, request.senderName)
+        return {
+            type = "message_response",
+            success = success,
+            messageId = #messageHistory,
+            error = not success and err or nil
+        }
+        
+    elseif request.type == "get_online" then
+        return {
+            type = "online_list",
+            clients = getOnlineClients(),
+            serverName = SERVER_DISPLAY_NAME
+        }
+        
+    elseif request.type == "get_messages" then
+        return {
+            type = "messages",
+            messages = getClientMessages(senderId)
+        }
+        
+    elseif request.type == "ping" then
+        if clients[senderId] then
+            clients[senderId].lastSeen = os.epoch("utc")
+            clients[senderId].online = true
+        end
+        return {
+            type = "pong",
+            time = os.epoch("utc")
+        }
+        
+    elseif request.type == "get_server_info" then
+        return {
+            type = "server_info",
+            serverName = SERVER_DISPLAY_NAME,
+            serverId = os.getComputerID(),
+            onlineCount = #getOnlineClients()
+        }
+    end
+    
+    return {
+        type = "error",
+        message = "Bad request"
+    }
+end
+
+function cleanupOldClients()
+    local now = os.epoch("utc")
+    local removed = 0
+    
+    for id, client in pairs(clients) do
+        if now - client.lastSeen > 300000 then
+            client.online = false
+            removed = removed + 1
+        end
+    end
+    
+    if removed > 0 then
+        print("Marked " .. removed .. " clients as offline")
+    end
+end
+
+function serverStats()
+    local online = 0
+    local total = 0
+    local pending = 0
+    
+    for id, client in pairs(clients) do
+        total = total + 1
+        if client.online then
+            online = online + 1
+        end
+    end
+    
+    for id, queue in pairs(messages) do
+        pending = pending + #queue
+    end
+    
+    return {
+        online = online,
+        total = total,
+        pending = pending,
+        totalMessages = #messageHistory
+    }
+end
+
+function displayStats()
+    local stats = serverStats()
+    print(string.format("[%s] Stats: %d/%d online | %d pending | %d messages",
+        os.date("%H:%M:%S"), stats.online, stats.total, stats.pending, stats.totalMessages))
+end
+
+-- Main server loop
+function main()
+    loadData()
+    
+    print("\n=== Server Started ===")
+    print("Server Name: " .. SERVER_DISPLAY_NAME)
+    print("Server ID: " .. os.getComputerID())
+    print("Modem Side: " .. MODEM_SIDE)
+    print("Waiting for connections...")
+    print("Press Ctrl+T to stop server\n")
+    
+    while true do
+        local senderId, request, protocol = rednet.receive(nil, 2)
+        
+        if senderId then
+            if protocol == "messenger_server" then
+                local response = processRequest(senderId, request)
+                rednet.send(senderId, response, "messenger_server")
+            end
+        end
+        
+        local timer = os.startTimer(10)
+        local event = os.pullEvent()
+        
+        if event == "timer" then
+            cleanupOldClients()
+            displayStats()
+            
+            if os.epoch("utc") % 60000 < 100 then
+                saveData()
+            end
+        elseif event == "terminate" then
+            print("\nServer stopping...")
+            saveData()
             break
         end
     end
 end
 
--- ЗАПУСКАЕМ ВСЁ С ЗАЩИТОЙ
-safeStartup()
+-- Error handling
+local ok, err = pcall(main)
+if not ok then
+    print("Server error: " .. err)
+    saveData()
+end
+
+rednet.close()
+print("Server stopped")
