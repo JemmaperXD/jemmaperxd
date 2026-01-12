@@ -310,19 +310,32 @@ local function sendMessage(text)
     end
     
     -- Автоматически прокручиваем к новому сообщению
-    uiState.messageScroll = math.max(0, (#messages[selectedContact]) - 10)
+    local msgCount = #messages[selectedContact]
+    uiState.messageScroll = math.max(0, msgCount - 10)
     
     return true, "Message sent"
 end
 
 local function formatTime(timestamp)
-    if not timestamp then return "" end
-    local time = os.date("*t", timestamp)
-    return string.format("%02d:%02d", time.hour, time.min)
+    if not timestamp or type(timestamp) ~= "number" then 
+        return "" 
+    end
+    
+    local success, time = pcall(os.date, "*t", timestamp)
+    if not success or not time then 
+        return "" 
+    end
+    
+    local hour = time.hour or 0
+    local min = time.min or 0
+    
+    return string.format("%02d:%02d", hour, min)
 end
 
 local function wrapText(text, width)
-    if not text then return {} end
+    if not text or type(text) ~= "string" then 
+        return {} 
+    end
     
     local lines = {}
     local line = ""
@@ -362,7 +375,7 @@ local function drawSidebar()
     local width, height = term.getSize()
     local sidebarWidth = math.floor(width * 0.2)
     
-    -- Очистка боковой панели
+    -- Clear sidebar
     for y = 1, height do
         term.setCursorPos(1, y)
         term.setBackgroundColor(colors.sidebar)
@@ -373,7 +386,7 @@ local function drawSidebar()
     term.setTextColor(colors.text)
     term.write("Contacts")
     
-    -- Статус подключения
+    -- Connection status
     term.setCursorPos(1, 2)
     if connected then
         term.setTextColor(colors.success)
@@ -385,12 +398,12 @@ local function drawSidebar()
         term.write("✗ Disconnected")
     end
     
-    -- Имя пользователя
+    -- Username
     term.setCursorPos(1, 3)
     term.setTextColor(colors.timestamp)
     term.write("You: " .. clientName)
     
-    -- Ошибка подключения (если есть)
+    -- Connection error (if any)
     local errorLine = 4
     if connectionError then
         term.setCursorPos(1, errorLine)
@@ -403,12 +416,12 @@ local function drawSidebar()
         errorLine = errorLine + 1
     end
     
-    -- Разделитель
+    -- Separator
     term.setCursorPos(1, errorLine)
     term.setTextColor(colors.timestamp)
     term.write(string.rep("-", sidebarWidth))
     
-    -- Список контактов
+    -- Contacts list
     local startY = errorLine + 1
     local i = 0
     local contactList = {}
@@ -418,7 +431,7 @@ local function drawSidebar()
         table.insert(contactList, {id = contactId, data = contact})
     end
     
-    -- Сортируем контакты по имени
+    -- Sort contacts by name
     table.sort(contactList, function(a, b)
         return (a.data.name or "Unknown") < (b.data.name or "Unknown")
     end)
@@ -440,7 +453,7 @@ local function drawSidebar()
                 term.setBackgroundColor(colors.sidebar)
             end
             
-            -- Индикатор непрочитанных сообщений
+            -- Unread message indicator
             if unreadCount[contactId] and unreadCount[contactId] > 0 then
                 term.setTextColor(colors.unread)
                 term.write("[" .. unreadCount[contactId] .. "] ")
@@ -449,7 +462,7 @@ local function drawSidebar()
                 term.setTextColor(colors.text)
             end
             
-            -- Статус онлайн/офлайн
+            -- Online/offline status
             if contact.status == "online" then
                 term.setTextColor(colors.success)
                 term.write("● ")
@@ -460,7 +473,7 @@ local function drawSidebar()
             
             term.setTextColor(colors.text)
             
-            -- Имя контакта
+            -- Contact name
             local displayName = contact.name or "Unknown"
             if #displayName > sidebarWidth - 4 then
                 displayName = displayName:sub(1, sidebarWidth - 7) .. "..."
@@ -514,23 +527,30 @@ local function drawChatArea()
     
     local contactName = contacts[selectedContact] and contacts[selectedContact].name or "Unknown"
     
-    -- Заголовок чата
+    -- Chat header
     term.setCursorPos(sidebarWidth + 1, 1)
     term.setTextColor(colors.text)
     term.write("Chat with: ")
     term.setTextColor(colors.highlight)
     term.write(contactName)
     
-    -- Разделитель
+    -- Separator
     term.setCursorPos(sidebarWidth + 1, 2)
     term.setTextColor(colors.timestamp)
     term.write(string.rep("-", chatWidth))
     
-    -- История сообщений
+    -- Message history
     local chatMessages = messages[selectedContact] or {}
     local messageScroll = uiState.messageScroll or 0
-    local maxVisible = chatHeight - 3
+    local maxVisible = math.max(1, chatHeight - 3)
     local totalMessages = #chatMessages
+    
+    -- БЕЗОПАСНОЕ вычисление startMessage
+    local startMessage = 1
+    if totalMessages > 0 then
+        local calc = totalMessages - maxVisible + 3 - messageScroll
+        startMessage = math.max(1, math.min(calc, totalMessages))
+    end
     
     if totalMessages == 0 then
         local noMessages = "No messages yet. Start the conversation!"
@@ -540,7 +560,6 @@ local function drawChatArea()
         return
     end
     
-    local startMessage = math.max(1, totalMessages - maxVisible - messageScroll + 1)
     local y = 3
     
     for i = startMessage, totalMessages do
@@ -551,7 +570,7 @@ local function drawChatArea()
         
         term.setCursorPos(sidebarWidth + 1, y)
         
-        -- Определяем отправителя
+        -- Determine sender
         if msg.senderId == serverId or msg.senderName == clientName or msg.isLocal then
             term.setTextColor(colors.highlight)
             term.write("You: ")
@@ -562,12 +581,15 @@ local function drawChatArea()
         
         term.setTextColor(colors.text)
         
-        -- Время
-        term.setCursorPos(sidebarWidth + chatWidth - 6, y)
-        term.setTextColor(colors.timestamp)
-        term.write(formatTime(msg.timestamp))
+        -- Time
+        local timeText = formatTime(msg.timestamp)
+        if #timeText > 0 then
+            term.setCursorPos(sidebarWidth + chatWidth - 6, y)
+            term.setTextColor(colors.timestamp)
+            term.write(timeText)
+        end
         
-        -- Текст сообщения
+        -- Message text
         term.setCursorPos(sidebarWidth + 1, y + 1)
         term.setTextColor(colors.text)
         
@@ -581,7 +603,7 @@ local function drawChatArea()
         y = y + #lines + 2
     end
     
-    -- Показать индикатор прокрутки
+    -- Show scroll indicator
     if messageScroll > 0 then
         term.setCursorPos(sidebarWidth + chatWidth - 3, 3)
         term.setTextColor(colors.timestamp)
@@ -718,7 +740,7 @@ local function handleServerMessage(message)
             if peripheral.isPresent("speaker") then
                 local speaker = peripheral.find("speaker")
                 if speaker then
-                    speaker.playSound("block.note_block.pling", 0.5)
+                    pcall(speaker.playSound, speaker, "block.note_block.pling", 0.5)
                 end
             end
         end
@@ -774,6 +796,10 @@ end
 
 -- Main function
 local function main()
+    -- Debug output
+    print("=== Messenger Client ===")
+    print("Client name: " .. (clientName or "Unknown"))
+    
     -- Check modem
     if not findModem() then
         print("Error: Wireless modem not found!")
@@ -784,11 +810,10 @@ local function main()
     end
     
     -- Open modem
+    print("Opening rednet on side: " .. modemSide)
     rednet.open(modemSide)
     
     print("Messenger client starting...")
-    print("Client name: " .. clientName)
-    print("Modem side: " .. modemSide)
     print("Press F1 for help, Ctrl+T to exit")
     sleep(2) -- Give user time to read
     
@@ -875,7 +900,7 @@ local function main()
                     uiState.showHelp = false
                     drawUI()
                 else
-                    -- Если нет выбранного контакта, выбираем первый
+                    -- If no contact selected, select first
                     if not selectedContact then
                         for contactId, _ in pairs(contacts) do
                             selectedContact = contactId
@@ -912,8 +937,8 @@ local function main()
                 
             elseif key == 201 then -- Page Up
                 if selectedContact then
-                    uiState.messageScroll = math.min(#(messages[selectedContact] or {}), 
-                        (uiState.messageScroll or 0) + 5)
+                    local msgCount = #(messages[selectedContact] or {})
+                    uiState.messageScroll = math.min(msgCount, (uiState.messageScroll or 0) + 5)
                     drawUI()
                 end
                 
