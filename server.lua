@@ -1,15 +1,54 @@
----- Messenger Server for CC:Tweaked
+-- Messenger Server for CC:Tweaked
 local VERSION = "1.0"
 local PORT = 7777
 local MAX_CLIENTS = 20
+
+-- Parse command line arguments
+local args = {...}
+local serverName = nil
+local modemSide = nil
+
+for i = 1, #args do
+    local arg = args[i]
+    if arg == "-n" or arg == "--name" then
+        serverName = args[i + 1]
+    elseif arg == "-s" or arg == "--side" then
+        modemSide = args[i + 1]
+    elseif arg == "-h" or arg == "--help" then
+        print("Usage: server [options]")
+        print("Options:")
+        print("  -n, --name <name>    Set server display name")
+        print("  -s, --side <side>    Specify modem side (left/right/top/bottom/back/front)")
+        print("  -h, --help           Show this help message")
+        print("  -i, --id <id>        Specify custom server ID")
+        return
+    elseif arg == "-i" or arg == "--id" then
+        local customId = tonumber(args[i + 1])
+        if customId then
+            -- In CC:Tweaked, we can't change computer ID, but we can use it as display
+            print("Note: Computer ID is fixed, using " .. customId .. " as display only")
+        end
+    end
+end
 
 -- Initialization
 print("=== Messenger Server v" .. VERSION .. " ===")
 print("Loading...")
 
 -- Function to find wireless modem
-function findWirelessModem()
+function findWirelessModem(specifiedSide)
     print("Searching for wireless modem...")
+    
+    if specifiedSide then
+        -- Check specified side first
+        local modem = peripheral.wrap(specifiedSide)
+        if modem and modem.isWireless and modem.isWireless() then
+            print("Using specified modem on side: " .. specifiedSide)
+            return specifiedSide
+        else
+            print("Warning: No wireless modem found on specified side: " .. specifiedSide)
+        end
+    end
     
     -- Get all peripherals
     local sides = peripheral.getNames()
@@ -34,7 +73,7 @@ function findWirelessModem()
     end
     
     -- Ask user to specify side
-    print("Please enter modem side (left, right, top, bottom, back, front):")
+    print("\nPlease enter modem side (left, right, top, bottom, back, front):")
     local input = read()
     
     if input then
@@ -52,7 +91,7 @@ function findWirelessModem()
 end
 
 -- Find and open modem
-local MODEM_SIDE = findWirelessModem()
+local MODEM_SIDE = findWirelessModem(modemSide)
 if not MODEM_SIDE then
     print("ERROR: Could not find wireless modem!")
     print("Please attach a wireless modem and try again")
@@ -68,6 +107,11 @@ end
 rednet.open(MODEM_SIDE)
 print("Modem opened successfully on side: " .. MODEM_SIDE)
 
+-- Set server name
+local SERVER_DISPLAY_NAME = serverName or os.getComputerLabel() or "Server" .. os.getComputerID()
+print("Server display name: " .. SERVER_DISPLAY_NAME)
+print("Server computer ID: " .. os.getComputerID())
+
 -- Data structures
 local clients = {}
 local messages = {}
@@ -77,7 +121,8 @@ local messageHistory = {}
 function saveData()
     local data = {
         clients = clients,
-        messages = messages
+        messages = messages,
+        serverName = SERVER_DISPLAY_NAME
     }
     
     local file = fs.open("server_data.dat", "w")
@@ -98,7 +143,9 @@ function loadData()
             if data then
                 clients = data.clients or clients
                 messages = data.messages or messages
+                SERVER_DISPLAY_NAME = data.serverName or SERVER_DISPLAY_NAME
                 print("Data loaded: " .. #messageHistory .. " messages, " .. countTable(clients) .. " clients")
+                print("Server name: " .. SERVER_DISPLAY_NAME)
             end
         end
     end
@@ -195,6 +242,7 @@ function processRequest(senderId, request)
         return {
             type = "register_response",
             success = success,
+            serverName = SERVER_DISPLAY_NAME,
             message = success and "OK" or "ERROR"
         }
         
@@ -211,7 +259,8 @@ function processRequest(senderId, request)
     elseif request.type == "get_online" then
         return {
             type = "online_list",
-            clients = getOnlineClients()
+            clients = getOnlineClients(),
+            serverName = SERVER_DISPLAY_NAME
         }
         
     elseif request.type == "get_messages" then
@@ -228,6 +277,14 @@ function processRequest(senderId, request)
         return {
             type = "pong",
             time = os.epoch("utc")
+        }
+        
+    elseif request.type == "get_server_info" then
+        return {
+            type = "server_info",
+            serverName = SERVER_DISPLAY_NAME,
+            serverId = os.getComputerID(),
+            onlineCount = #getOnlineClients()
         }
     end
     
@@ -288,7 +345,9 @@ function main()
     loadData()
     
     print("\n=== Server Started ===")
+    print("Server Name: " .. SERVER_DISPLAY_NAME)
     print("Server ID: " .. os.getComputerID())
+    print("Modem Side: " .. MODEM_SIDE)
     print("Waiting for connections...")
     print("Press Ctrl+T to stop server\n")
     
