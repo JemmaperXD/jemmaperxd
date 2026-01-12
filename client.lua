@@ -282,7 +282,8 @@ local function sendMessage(text)
         table.remove(messages[selectedContact], 1)
     end
     
-    uiState.messageScroll = math.max(0, #messages[selectedContact] - 10)
+    -- Исправлено: добавлена проверка на nil
+    uiState.messageScroll = math.max(0, (#messages[selectedContact] or 0) - 10)
     
     return true, "Message sent"
 end
@@ -376,8 +377,10 @@ local function drawSidebar()
     end
     
     for _, contactEntry in ipairs(contactList) do
-        if i >= uiState.contactScroll and startY + i - uiState.contactScroll < height then
-            local y = startY + i - uiState.contactScroll
+        -- Исправлено: добавлены проверки на nil
+        local contactScroll = uiState.contactScroll or 0
+        if i >= contactScroll and startY + i - contactScroll < height then
+            local y = startY + i - contactScroll
             local contactId = contactEntry.id
             local contact = contactEntry.data
             
@@ -469,7 +472,9 @@ local function drawChatArea()
     
     -- Message history
     local chatMessages = messages[selectedContact] or {}
-    local startMessage = math.max(1, #chatMessages - chatHeight + 3 - uiState.messageScroll)
+    -- Исправлено: добавлены проверки на nil
+    local messageScroll = uiState.messageScroll or 0
+    local startMessage = math.max(1, (#chatMessages or 0) - chatHeight + 3 - messageScroll)
     local y = 3
     
     for i = startMessage, #chatMessages do
@@ -545,10 +550,10 @@ local function drawInputArea()
     term.write("> ")
     
     local maxWidth = width - sidebarWidth - 3
-    local displayText = uiState.inputText
+    local displayText = uiState.inputText or ""
     
     if #displayText > maxWidth then
-        local cursorPos = uiState.inputCursor
+        local cursorPos = uiState.inputCursor or 1
         if cursorPos > maxWidth then
             displayText = "..." .. displayText:sub(cursorPos - maxWidth + 4, cursorPos + 10)
         else
@@ -559,7 +564,7 @@ local function drawInputArea()
     term.write(displayText)
     
     -- Cursor
-    local cursorX = sidebarWidth + 3 + math.min(#uiState.inputText, maxWidth)
+    local cursorX = sidebarWidth + 3 + math.min(#displayText, maxWidth)
     term.setCursorPos(cursorX, inputY)
     
     -- Help
@@ -771,7 +776,7 @@ local function main()
                             unreadCount[contactId] = 0
                             break
                         end
-                    elseif uiState.inputText ~= "" and selectedContact and connected then
+                    elseif (uiState.inputText or "") ~= "" and selectedContact and connected then
                         local success, msg = sendMessage(uiState.inputText)
                         if not success then
                             print("Failed to send: " .. msg)
@@ -782,31 +787,31 @@ local function main()
                 end
                 
             elseif key == 14 then -- Backspace
-                if #uiState.inputText > 0 then
+                if #(uiState.inputText or "") > 0 then
                     uiState.inputText = uiState.inputText:sub(1, -2)
-                    uiState.inputCursor = math.max(1, uiState.inputCursor - 1)
+                    uiState.inputCursor = math.max(1, (uiState.inputCursor or 1) - 1)
                 end
                 
             elseif key == 200 then -- Up arrow
-                uiState.contactScroll = math.max(0, uiState.contactScroll - 1)
+                uiState.contactScroll = math.max(0, (uiState.contactScroll or 0) - 1)
                 
             elseif key == 208 then -- Down arrow
-                uiState.contactScroll = uiState.contactScroll + 1
+                uiState.contactScroll = (uiState.contactScroll or 0) + 1
                 
             elseif key == 201 then -- Page Up
                 if selectedContact then
                     uiState.messageScroll = math.min(#(messages[selectedContact] or {}), 
-                        uiState.messageScroll + 5)
+                        (uiState.messageScroll or 0) + 5)
                 end
                 
             elseif key == 209 then -- Page Down
-                uiState.messageScroll = math.max(0, uiState.messageScroll - 5)
+                uiState.messageScroll = math.max(0, (uiState.messageScroll or 0) - 5)
             end
             
         elseif event == "char" then
             if not uiState.showHelp and connected then
-                uiState.inputText = uiState.inputText .. p1
-                uiState.inputCursor = uiState.inputCursor + 1
+                uiState.inputText = (uiState.inputText or "") .. p1
+                uiState.inputCursor = (uiState.inputCursor or 1) + 1
             end
             
         elseif event == "mouse_click" then
@@ -815,7 +820,7 @@ local function main()
             
             if x <= sidebarWidth then
                 -- Click in sidebar
-                local contactIndex = y - 6 + uiState.contactScroll
+                local contactIndex = y - 6 + (uiState.contactScroll or 0)
                 local i = 1
                 for contactId, _ in pairs(contacts) do
                     if i == contactIndex then
@@ -836,11 +841,9 @@ local function main()
             local sidebarWidth = math.floor(term.getSize() * 0.2)
             
             if x <= sidebarWidth then
-                uiState.contactScroll = uiState.contactScroll + direction
-                if uiState.contactScroll < 0 then uiState.contactScroll = 0 end
+                uiState.contactScroll = math.max(0, (uiState.contactScroll or 0) + direction)
             else
-                uiState.messageScroll = uiState.messageScroll + direction
-                if uiState.messageScroll < 0 then uiState.messageScroll = 0 end
+                uiState.messageScroll = math.max(0, (uiState.messageScroll or 0) + direction)
             end
         end
         
