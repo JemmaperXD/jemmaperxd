@@ -1,29 +1,74 @@
 -- Messenger Client with GUI
 local VERSION = "1.0"
-local SERVER_ID = nil
-local PING_INTERVAL = 10
 
--- Check arguments
-if not arg[1] then
+-- Parse command line arguments
+local args = {...}
+local serverId = nil
+local clientName = nil
+local modemSide = nil
+local showHelp = false
+
+-- Simple argument parsing
+for i = 1, #args do
+    local arg = args[i]
+    if arg == "-s" or arg == "--server" then
+        serverId = tonumber(args[i + 1])
+    elseif arg == "-n" or arg == "--name" then
+        clientName = args[i + 1]
+    elseif arg == "-m" or arg == "--modem" then
+        modemSide = args[i + 1]
+    elseif arg == "-h" or arg == "--help" then
+        showHelp = true
+    elseif not serverId and not tonumber(arg) == nil then
+        -- If no flag, first numeric argument is server ID
+        serverId = tonumber(arg)
+    end
+end
+
+if showHelp then
+    print("Messenger Client v" .. VERSION)
+    print("Usage: client [options] <server_id>")
+    print()
+    print("Options:")
+    print("  -s, --server <id>     Server computer ID (required)")
+    print("  -n, --name <name>     Client display name")
+    print("  -m, --modem <side>    Modem side (left/right/top/bottom/back/front)")
+    print("  -h, --help            Show this help message")
+    print()
+    print("Examples:")
+    print("  client 42")
+    print("  client --server 42 --name Alice --modem right")
+    print("  client -s 42 -n Bob")
+    return
+end
+
+if not serverId then
+    print("ERROR: Server ID is required!")
     print("Usage: client <server_id>")
-    print("Example: client 42")
-    print("\nTo find server ID, run 'server' on server computer")
+    print("or: client --server <server_id>")
     return
 end
 
-SERVER_ID = tonumber(arg[1])
-if not SERVER_ID then
-    print("Error: Invalid server ID")
-    print("Server ID must be a number")
-    return
-end
+local SERVER_ID = serverId
+local PING_INTERVAL = 10
 
 print("=== Messenger Client v" .. VERSION .. " ===")
 print("Connecting to server " .. SERVER_ID .. "...")
 
 -- Function to find wireless modem
-function findWirelessModem()
+function findWirelessModem(specifiedSide)
     print("Searching for wireless modem...")
+    
+    if specifiedSide then
+        -- Check specified side first
+        local modem = peripheral.wrap(specifiedSide)
+        if modem and modem.isWireless and modem.isWireless() then
+            print("Using specified modem on side: " .. specifiedSide)
+            return specifiedSide
+        else
+            print("Warning: No wireless modem found on specified side: " .. specifiedSide)
+        end
+    end
     
     -- Get all peripherals
     local sides = peripheral.getNames()
@@ -66,7 +111,7 @@ function findWirelessModem()
 end
 
 -- Find and open modem
-local MODEM_SIDE = findWirelessModem()
+local MODEM_SIDE = findWirelessModem(modemSide)
 if not MODEM_SIDE then
     print("ERROR: Could not find wireless modem!")
     print("Please attach a wireless modem and try again")
@@ -84,14 +129,19 @@ print("Modem opened successfully on side: " .. MODEM_SIDE)
 
 -- Application state
 local state = {
-    username = os.getComputerLabel() or "User" .. os.getComputerID(),
+    username = clientName or os.getComputerLabel() or "User" .. os.getComputerID(),
     messages = {},
     contacts = {},
     currentContact = nil,
     connected = false,
     lastPing = 0,
-    serverId = SERVER_ID
+    serverId = SERVER_ID,
+    serverName = "Unknown",
+    sentMessages = {} -- Track sent message IDs to prevent duplicates
 }
+
+print("Client name: " .. state.username)
+print("Modem side: " .. MODEM_SIDE)
 
 -- GUI constants
 local WIDTH, HEIGHT = term.getSize()
@@ -111,6 +161,10 @@ local gui = {
 }
 
 -- Network functions
+function generateMessageId()
+    return os.getComputerID() .. "_" .. os.epoch("utc") .. "_" .. math.random(1000, 9999)
+end
+
 function sendRequest(request)
     rednet.send(SERVER_ID, request, "messenger_server")
     
@@ -132,7 +186,8 @@ function connectToServer()
     
     if response and response.success then
         state.connected = true
-        print("Connected to server!")
+        state.serverName = response.serverName or "Unknown"
+        print("Connected to server: " .. state.serverName)
         return true
     else
         print("Failed to connect to server")
@@ -141,14 +196,24 @@ function connectToServer()
 end
 
 function sendMessage(targetId, message)
+    local messageId = generateMessageId()
+    
+    -- Check if we already sent this message recently
+    if state.sentMessages[messageId] then
+        print("Warning: Duplicate message detected, not sending")
+        return false
+    end
+    
     local response = sendRequest({
         type = "send_message",
         target = targetId,
         message = message,
-        senderName = state.username
+        senderName = state.username,
+        messageId = messageId
     })
     
     if response and response.success then
+        state.sentMessages[messageId] = os.epoch("utc")
         return true
     else
         print("Failed to send message: " .. (response and response.error or "timeout"))
@@ -163,6 +228,7 @@ function updateContacts()
     
     if response and response.clients then
         state.contacts = response.clients
+        state.serverName = response.serverName or state.serverName
         
         -- Keep current contact selected if possible
         if state.currentContact then
@@ -184,6 +250,23 @@ function updateContacts()
     return false
 end
 
+function isMessageDuplicate(msg)
+    -- Check if we already have this message
+    for _, existing in ipairs(state.messages) do
+        if existing.id == msg.id then
+            return true
+        end
+        -- Also check by content and time (within 2 seconds)
+        if existing.sender == msg.sender and 
+           existing.target == msg.target and 
+           existing.message == msg.message and
+           math.abs(existing.time - msg.time) < 2000 then
+            return true
+        end
+    end
+    return false
+end
+
 function getNewMessages()
     local response = sendRequest({
         type = "get_messages"
@@ -192,8 +275,10 @@ function getNewMessages()
     if response and response.messages then
         local newCount = 0
         for _, msg in ipairs(response.messages) do
-            table.insert(state.messages, msg)
-            newCount = newCount + 1
+            if not isMessageDuplicate(msg) then
+                table.insert(state.messages, msg)
+                newCount = newCount + 1
+            end
         end
         
         if newCount > 0 then
@@ -210,11 +295,40 @@ function getNewMessages()
     return false
 end
 
+function getServerInfo()
+    local response = sendRequest({
+        type = "get_server_info"
+    })
+    
+    if response and response.type == "server_info" then
+        state.serverName = response.serverName or state.serverName
+        return response
+    end
+    
+    return nil
+end
+
 function sendPing()
     sendRequest({
         type = "ping"
     })
     state.lastPing = os.clock()
+end
+
+function cleanupOldSentMessages()
+    local now = os.epoch("utc")
+    local cutoff = now - 60000 -- 1 minute
+    
+    local toRemove = {}
+    for msgId, timestamp in pairs(state.sentMessages) do
+        if timestamp < cutoff then
+            table.insert(toRemove, msgId)
+        end
+    end
+    
+    for _, msgId in ipairs(toRemove) do
+        state.sentMessages[msgId] = nil
+    end
 end
 
 -- GUI functions
@@ -225,15 +339,26 @@ function drawBorder()
     -- Top bar
     term.setCursorPos(1, 1)
     term.write(string.rep(" ", WIDTH))
+    
     term.setCursorPos(2, 1)
+    term.write("M: " .. state.username)
     
+    -- Server info
+    term.setCursorPos(WIDTH - 30, 1)
+    term.write("S: " .. state.serverName .. " (" .. SERVER_ID .. ")")
+    
+    -- Status
     local status = state.connected and "ONLINE" or "OFFLINE"
-    local statusColor = state.connected and colors.green or colors.red
     
-    term.write("Messenger - " .. state.username .. " (S:" .. SERVER_ID .. ")")
+    term.setCursorPos(WIDTH - 8, 1)
+    if state.connected then
+        term.setBackgroundColor(colors.green)
+    else
+        term.setBackgroundColor(colors.red)
+    end
+    term.write(" " .. status .. " ")
     
-    term.setCursorPos(WIDTH - 15, 1)
-    term.write("[" .. status .. "]")
+    term.setBackgroundColor(colors.blue)
     
     -- Separator
     for y = 2, HEIGHT - INPUT_HEIGHT do
@@ -283,16 +408,15 @@ function drawContacts()
             
             -- Truncate long names
             local displayName = contact.name
-            if #displayName > CONTACTS_WIDTH - 3 then
-                displayName = string.sub(displayName, 1, CONTACTS_WIDTH - 3) .. "..."
-            end
-            
-            -- Add ID for short names
-            if #displayName < CONTACTS_WIDTH - 10 then
-                displayName = displayName .. " (" .. contact.id .. ")"
+            if #displayName > CONTACTS_WIDTH - 8 then
+                displayName = string.sub(displayName, 1, CONTACTS_WIDTH - 8) .. "..."
             end
             
             term.write(displayName)
+            
+            -- Show ID for short names
+            term.setCursorPos(CONTACTS_WIDTH - 5, y)
+            term.write("(" .. contact.id .. ")")
         end
     end
     
@@ -323,7 +447,9 @@ function drawMessages()
     
     if not state.currentContact then
         term.setCursorPos(MESSAGES_X + 5, math.floor(HEIGHT / 2))
-        term.write("Select a contact from the left panel")
+        term.write("← Select a contact from the list")
+        term.setCursorPos(MESSAGES_X + 5, math.floor(HEIGHT / 2) + 1)
+        term.write("Press F1 for help")
         return
     end
     
@@ -348,6 +474,8 @@ function drawMessages()
     if #contactMessages == 0 then
         term.setCursorPos(MESSAGES_X + 5, math.floor(HEIGHT / 2))
         term.write("No messages with " .. contactName)
+        term.setCursorPos(MESSAGES_X + 5, math.floor(HEIGHT / 2) + 1)
+        term.write("Start typing below to send a message")
         return
     end
     
@@ -368,10 +496,10 @@ function drawMessages()
         term.setCursorPos(MESSAGES_X, displayY)
         if isOwn then
             term.setTextColor(colors.green)
-            term.write("You:")
+            term.write("You: ")
         else
             term.setTextColor(colors.yellow)
-            term.write(contactName .. ":")
+            term.write(contactName .. ": ")
         end
         
         -- Message text (with wrapping)
@@ -427,7 +555,7 @@ function drawInput()
     
     if not state.currentContact then
         term.setCursorPos(1, HEIGHT - 1)
-        term.write("F1:Help | Arrow Keys:Navigate | Enter:Select/Send")
+        term.write("F1:Help | Arrows:Navigate | Enter:Select contact")
         return
     end
     
@@ -441,7 +569,7 @@ function drawInput()
     end
     
     term.setCursorPos(1, HEIGHT - INPUT_HEIGHT + 2)
-    term.write("To: " .. contactName .. " (ID:" .. state.currentContact .. ")")
+    term.write("To " .. contactName .. " (" .. state.currentContact .. "):")
     
     -- Input field
     term.setCursorPos(1, HEIGHT - 1)
@@ -475,6 +603,12 @@ function drawHelp()
     term.write("=== Messenger Help ===\n\n")
     
     term.setTextColor(colors.yellow)
+    term.write("Launch Options:\n")
+    term.setTextColor(colors.white)
+    term.write("  client <server_id>\n")
+    term.write("  client --server <id> --name <name> --modem <side>\n\n")
+    
+    term.setTextColor(colors.yellow)
     term.write("Navigation:\n")
     term.setTextColor(colors.white)
     term.write("  Up/Down - Select contact\n")
@@ -492,8 +626,9 @@ function drawHelp()
     term.setTextColor(colors.yellow)
     term.write("Status:\n")
     term.setTextColor(colors.white)
-    term.write("  ONLINE  - Connected to server\n")
-    term.write("  OFFLINE - Not connected\n")
+    term.write("  M: Your name\n")
+    term.write("  S: Server name (ID)\n")
+    term.write("  ONLINE/OFLLINE - Connection status\n")
     term.write("  Green   - Your messages\n")
     term.write("  Yellow  - Received messages\n\n")
     
@@ -544,14 +679,18 @@ function handleInput()
                 if state.currentContact then
                     -- Send message
                     if gui.inputText ~= "" then
-                        if sendMessage(state.currentContact, gui.inputText) then
-                            table.insert(state.messages, {
+                        local message = gui.inputText
+                        if sendMessage(state.currentContact, message) then
+                            -- Add message to local display immediately
+                            local tempMsg = {
+                                id = generateMessageId(),
                                 sender = os.getComputerID(),
                                 senderName = state.username,
                                 target = state.currentContact,
-                                message = gui.inputText,
+                                message = message,
                                 time = os.epoch("utc")
-                            })
+                            }
+                            table.insert(state.messages, tempMsg)
                             gui.inputText = ""
                             gui.inputScroll = 0
                             drawUI()
@@ -611,6 +750,9 @@ function main()
         return
     end
     
+    -- Get server info
+    getServerInfo()
+    
     -- Initial data load
     updateContacts()
     getNewMessages()
@@ -629,6 +771,7 @@ function main()
                 if state.connected then
                     updateContacts()
                     getNewMessages()
+                    cleanupOldSentMessages()
                     
                     if os.clock() - state.lastPing > PING_INTERVAL then
                         sendPing()
