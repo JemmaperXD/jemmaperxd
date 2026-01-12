@@ -355,7 +355,7 @@ local function osEngine()
                     -- Создаем временный файл для загрузки
                     local tempFile = "startup_temp.lua"
                     local finalFile = "startup.lua"
-                    local url = "https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/main/startup.lua"
+                    local url = "https://github.com/JemmaperXD/jemmaperxd/raw/refs/heads/stable/startup.lua"
                     
                     -- Пытаемся скачать обновление несколько раз
                     local downloadSuccess = false
