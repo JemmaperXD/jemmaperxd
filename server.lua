@@ -1,15 +1,15 @@
--- Сервер мессенджера для ComputerCraft: Tweaked
--- Запуск: server [--name <имя>] [--side <сторона>]
+-- Messenger server for ComputerCraft: Tweaked
+-- Run: server [--name <name>] [--side <side>]
 
--- Конфигурация
+-- Configuration
 local PROTOCOL = "messenger_v2"
 local CONFIG_FILE = "messenger_server.cfg"
 local DATA_FILE = "messenger_data.dat"
-local PING_TIMEOUT = 30 -- секунд
-local SAVE_INTERVAL = 60 -- секунд
+local PING_TIMEOUT = 30 -- seconds
+local SAVE_INTERVAL = 60 -- seconds
 
--- Глобальные переменные
-local serverName = "Сервер чата"
+-- Global variables
+local serverName = "Chat Server"
 local modemSide = nil
 local connectedClients = {}
 local messages = {}
@@ -17,7 +17,7 @@ local lastPing = {}
 local shouldSave = false
 local lastSaveTime = os.time()
 
--- Разбор аргументов командной строки
+-- Parse command line arguments
 local args = {...}
 for i = 1, #args do
     if args[i] == "-n" or args[i] == "--name" then
@@ -25,16 +25,16 @@ for i = 1, #args do
     elseif args[i] == "-s" or args[i] == "--side" then
         modemSide = args[i+1]
     elseif args[i] == "-h" or args[i] == "--help" then
-        print("Использование: server [опции]")
-        print("Опции:")
-        print("  -n, --name <имя>   Имя сервера")
-        print("  -s, --side <сторона> Сторона модема")
-        print("  -h, --help         Показать эту справку")
+        print("Usage: server [options]")
+        print("Options:")
+        print("  -n, --name <name>    Server name")
+        print("  -s, --side <side>    Modem side")
+        print("  -h, --help           Show this help")
         return
     end
 end
 
--- Функции для работы с файлами
+-- File handling functions
 local function loadConfig()
     if fs.exists(CONFIG_FILE) then
         local file = fs.open(CONFIG_FILE, "r")
@@ -74,7 +74,7 @@ local function saveData()
     lastSaveTime = os.time()
 end
 
--- Функция для поиска модема
+-- Find modem
 local function findModem()
     if modemSide then
         if peripheral.getType(modemSide) == "modem" then
@@ -94,7 +94,7 @@ local function findModem()
     return false
 end
 
--- Функция для проверки клиента
+-- Validate client
 local function validateClient(clientId, clientName)
     if not clientId or not clientName then
         return false
@@ -104,7 +104,7 @@ local function validateClient(clientId, clientName)
         return true
     end
     
-    -- Проверка на дублирование имени
+    -- Check for duplicate name
     for id, client in pairs(connectedClients) do
         if client.name == clientName and id ~= clientId then
             return false
@@ -114,10 +114,10 @@ local function validateClient(clientId, clientName)
     return true
 end
 
--- Обработчики сообщений
+-- Message handlers
 local function handleRegister(senderId, data)
     if not validateClient(senderId, data.clientName) then
-        return {type = "error", message = "Недопустимое имя клиента"}
+        return {type = "error", message = "Invalid client name"}
     end
     
     connectedClients[senderId] = {
@@ -126,7 +126,7 @@ local function handleRegister(senderId, data)
         status = "online"
     }
     
-    -- Сохраняем для новых клиентов
+    -- Initialize for new clients
     messages[senderId] = messages[senderId] or {
         inbox = {},
         outbox = {},
@@ -135,7 +135,7 @@ local function handleRegister(senderId, data)
     
     lastPing[senderId] = os.time()
     
-    -- Сообщаем всем о новом клиенте
+    -- Notify all about new client
     for clientId, _ in pairs(connectedClients) do
         if clientId ~= senderId then
             rednet.send(clientId, {
@@ -150,18 +150,18 @@ local function handleRegister(senderId, data)
         type = "register_ack",
         serverName = serverName,
         clients = connectedClients,
-        message = "Регистрация успешна"
+        message = "Registration successful"
     }
 end
 
 local function handleSendMessage(senderId, data)
     if not validateClient(senderId, nil) then
-        return {type = "error", message = "Клиент не зарегистрирован"}
+        return {type = "error", message = "Client not registered"}
     end
     
     local recipientId = data.recipientId
     if not connectedClients[recipientId] then
-        return {type = "error", message = "Получатель не найден"}
+        return {type = "error", message = "Recipient not found"}
     end
     
     local message = {
@@ -174,14 +174,14 @@ local function handleSendMessage(senderId, data)
         read = false
     }
     
-    -- Сохраняем в исходящие отправителя
+    -- Save to sender's outbox
     table.insert(messages[senderId].outbox, message)
     
-    -- Сохраняем во входящие получателя
+    -- Save to recipient's inbox
     table.insert(messages[recipientId].inbox, message)
     messages[recipientId].unread = (messages[recipientId].unread or 0) + 1
     
-    -- Отправляем получателю
+    -- Send to recipient
     rednet.send(recipientId, {
         type = "new_message",
         message = message
@@ -198,7 +198,7 @@ end
 
 local function handleGetOnline(senderId, data)
     if not validateClient(senderId, nil) then
-        return {type = "error", message = "Клиент не зарегистрирован"}
+        return {type = "error", message = "Client not registered"}
     end
     
     return {
@@ -210,7 +210,7 @@ end
 
 local function handleGetMessages(senderId, data)
     if not validateClient(senderId, nil) then
-        return {type = "error", message = "Клиент не зарегистрирован"}
+        return {type = "error", message = "Client not registered"}
     end
     
     local clientMessages = messages[senderId] or {inbox = {}, outbox = {}}
@@ -251,7 +251,7 @@ local function handlePing(senderId, data)
     }
 end
 
--- Основная функция обработки сообщений
+-- Main message handler
 local function handleMessage(senderId, message, protocol)
     if protocol ~= PROTOCOL then
         return
@@ -260,7 +260,7 @@ local function handleMessage(senderId, message, protocol)
     if not message.type then
         rednet.send(senderId, {
             type = "error",
-            message = "Неверный формат сообщения"
+            message = "Invalid message format"
         }, PROTOCOL)
         return
     end
@@ -280,7 +280,7 @@ local function handleMessage(senderId, message, protocol)
     else
         response = {
             type = "error",
-            message = "Неизвестный тип сообщения"
+            message = "Unknown message type"
         }
     end
     
@@ -289,7 +289,7 @@ local function handleMessage(senderId, message, protocol)
     end
 end
 
--- Функция очистки неактивных клиентов
+-- Cleanup inactive clients
 local function cleanupClients()
     local currentTime = os.time()
     local toRemove = {}
@@ -306,7 +306,7 @@ local function cleanupClients()
             connectedClients[clientId] = nil
             lastPing[clientId] = nil
             
-            -- Сообщаем о выходе клиента
+            -- Notify about client disconnect
             for otherId, _ in pairs(connectedClients) do
                 rednet.send(otherId, {
                     type = "client_offline",
@@ -315,42 +315,42 @@ local function cleanupClients()
                 }, PROTOCOL)
             end
             
-            print("Клиент отключен: " .. clientName)
+            print("Client disconnected: " .. clientName)
         end
     end
 end
 
--- Основной цикл
+-- Main loop
 local function main()
-    -- Проверка модема
+    -- Check modem
     if not findModem() then
-        print("Ошибка: беспроводной модем не найден!")
-        print("Установите модем на любую сторону компьютера")
+        print("Error: Wireless modem not found!")
+        print("Place modem on any side of computer")
         return
     end
     
-    -- Инициализация модема
+    -- Initialize modem
     rednet.open(modemSide)
     rednet.host(PROTOCOL, serverName)
     
-    print("Сервер мессенджера запущен")
-    print("Имя сервера: " .. serverName)
-    print("Протокол: " .. PROTOCOL)
-    print("Модем на стороне: " .. modemSide)
-    print("Для выхода нажмите Ctrl+T")
+    print("Messenger server started")
+    print("Server name: " .. serverName)
+    print("Protocol: " .. PROTOCOL)
+    print("Modem side: " .. modemSide)
+    print("Press Ctrl+T to exit")
     print()
     
-    -- Загрузка данных
+    -- Load data
     local loadedData = loadData()
     messages = loadedData.messages or {}
     connectedClients = loadedData.clients or {}
     
-    -- Восстанавливаем lastPing
+    -- Restore lastPing
     for clientId, client in pairs(connectedClients) do
         lastPing[clientId] = client.lastSeen or os.time()
     end
     
-    -- Основной цикл обработки
+    -- Main event loop
     while true do
         local event, param1, param2, param3 = os.pullEvent()
         
@@ -361,27 +361,27 @@ local function main()
         elseif event == "timer" then
             cleanupClients()
             
-            -- Автосохранение
+            -- Auto-save
             if shouldSave and os.time() - lastSaveTime > SAVE_INTERVAL then
                 saveData()
-                print("Данные сохранены")
+                print("Data saved")
             end
             
         elseif event == "key" and param1 == 20 then -- Ctrl+T
             break
         end
         
-        -- Устанавливаем таймер для очистки
+        -- Set timer for cleanup
         os.startTimer(10)
     end
     
-    -- Корректное завершение
-    print("Завершение работы сервера...")
+    -- Clean shutdown
+    print("Shutting down server...")
     saveData()
     rednet.unhost(PROTOCOL, serverName)
     rednet.close(modemSide)
-    print("Сервер остановлен")
+    print("Server stopped")
 end
 
--- Запуск
+-- Start
 main()
