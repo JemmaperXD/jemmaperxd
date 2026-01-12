@@ -1,6 +1,6 @@
 -- Messenger Server for CC:Tweaked
 local VERSION = "1.2"
-local PORT = 1384
+local PROTOCOL = "messenger_v2"  -- Строковый протокол вместо числа
 local MAX_CLIENTS = 20
 
 -- Parse command line arguments
@@ -29,15 +29,13 @@ function getUsernameFromFolder()
     local userFolderPath = "/.User"
     
     if fs.exists(userFolderPath) and fs.isDir(userFolderPath) then
-        -- List all items in /.User folder
         local items = fs.list(userFolderPath)
         
         for _, item in ipairs(items) do
             local itemPath = fs.combine(userFolderPath, item)
             
-            -- Check if it's a directory and starts with "."
             if fs.isDir(itemPath) and string.sub(item, 1, 1) == "." then
-                local username = string.sub(item, 2) -- Remove the leading dot
+                local username = string.sub(item, 2)
                 if username and username ~= "" then
                     return username
                 end
@@ -55,7 +53,6 @@ function askForUsername()
     
     local username = read()
     
-    -- Validate username
     while not username or username == "" or #username > 20 do
         if not username or username == "" then
             print("Username cannot be empty. Please enter username:")
@@ -94,20 +91,17 @@ print("Server username: " .. username)
 -- Function to find wireless modem
 function findWirelessModem(specifiedSide)
     if specifiedSide then
-        -- Check specified side first
         local modem = peripheral.wrap(specifiedSide)
         if modem and modem.isWireless and modem.isWireless() then
             return specifiedSide
         end
     end
     
-    -- Get all peripherals
     local sides = peripheral.getNames()
     
     for _, side in ipairs(sides) do
         local type = peripheral.getType(side)
         if type == "modem" then
-            -- Check if it's a wireless modem
             local modem = peripheral.wrap(side)
             if modem and modem.isWireless and modem.isWireless() then
                 return side
@@ -115,13 +109,11 @@ function findWirelessModem(specifiedSide)
         end
     end
     
-    -- If not found, list available peripherals
     print("Available peripherals:")
     for _, side in ipairs(sides) do
         print("  " .. side .. " - " .. peripheral.getType(side))
     end
     
-    -- Ask user to specify side
     print("\nPlease enter modem side (left, right, top, bottom, back, front):")
     local input = read()
     
@@ -426,18 +418,19 @@ function main()
     print("\n=== Server Started ===")
     print("Server Name: " .. SERVER_DISPLAY_NAME)
     print("Server ID: " .. os.getComputerID())
-    print("Server Port: " .. PORT)
+    print("Protocol: " .. PROTOCOL)
     print("Modem Side: " .. MODEM_SIDE)
     print("Waiting for connections...")
     print("Press Ctrl+T to stop server\n")
     
     while true do
-        local senderId, request, protocol = rednet.receive(PORT, 2)
+        -- Исправлено: используем строку PROTOCOL вместо числа
+        local senderId, request, protocol = rednet.receive(PROTOCOL, 2)
         
         if senderId then
-            if protocol == PORT then
+            if protocol == PROTOCOL then
                 local response = processRequest(senderId, request)
-                rednet.send(senderId, response, PORT)
+                rednet.send(senderId, response, PROTOCOL)
             end
         end
         
