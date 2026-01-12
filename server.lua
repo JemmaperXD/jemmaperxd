@@ -1,6 +1,5 @@
 -- Messenger Server for CC:Tweaked
 local VERSION = "1.0"
-local SERVER_ID = 1384 -- Фиксированный ID сервера
 local PROTOCOL = "messenger_v2"
 
 -- Parse command line arguments
@@ -22,8 +21,6 @@ for i = 1, #args do
         print("  -n, --name <name>    Set server display name")
         print("  -s, --side <side>    Specify modem side (left/right/top/bottom/back/front)")
         print("  -h, --help           Show this help message")
-        print()
-        print("Server ID is fixed to: " .. SERVER_ID)
         return
     end
 end
@@ -95,20 +92,15 @@ if not MODEM_SIDE then
     return
 end
 
-local modem = peripheral.wrap(MODEM_SIDE)
-if not modem then
-    print("ERROR: Cannot access modem on side: " .. MODEM_SIDE)
-    return
-end
-
 rednet.open(MODEM_SIDE)
 print("Modem opened successfully on side: " .. MODEM_SIDE)
 
--- Set server name
+-- Host the server with our protocol
 local SERVER_DISPLAY_NAME = serverName or os.getComputerLabel() or "Server" .. os.getComputerID()
-print("Server display name: " .. SERVER_DISPLAY_NAME)
-print("Server computer ID: " .. os.getComputerID())
-print("Fixed server ID: " .. SERVER_ID)
+rednet.host(PROTOCOL, SERVER_DISPLAY_NAME)
+
+print("Server Name: " .. SERVER_DISPLAY_NAME)
+print("Server Computer ID: " .. os.getComputerID())
 print("Protocol: " .. PROTOCOL)
 
 -- Data structures
@@ -144,7 +136,6 @@ function loadData()
                 messages = data.messages or messages
                 SERVER_DISPLAY_NAME = data.serverName or SERVER_DISPLAY_NAME
                 print("Data loaded: " .. #messageHistory .. " messages, " .. countTable(clients) .. " clients")
-                print("Server name: " .. SERVER_DISPLAY_NAME)
             end
         end
     end
@@ -277,14 +268,6 @@ function processRequest(senderId, request)
             type = "pong",
             time = os.epoch("utc")
         }
-        
-    elseif request.type == "get_server_info" then
-        return {
-            type = "server_info",
-            serverName = SERVER_DISPLAY_NAME,
-            serverId = SERVER_ID,
-            onlineCount = #getOnlineClients()
-        }
     end
     
     return {
@@ -345,15 +328,14 @@ function main()
     
     print("\n=== Server Started ===")
     print("Server Name: " .. SERVER_DISPLAY_NAME)
-    print("Server ID: " .. os.getComputerID())
-    print("Fixed Server ID: " .. SERVER_ID)
+    print("Server Computer ID: " .. os.getComputerID())
     print("Protocol: " .. PROTOCOL)
     print("Modem Side: " .. MODEM_SIDE)
     print("Waiting for connections...")
     print("Press Ctrl+T to stop server\n")
     
     while true do
-        local senderId, request, protocol = rednet.receive(nil, 2)
+        local senderId, request, protocol = rednet.receive(PROTOCOL, 2)
         
         if senderId then
             if protocol == PROTOCOL then
@@ -387,5 +369,6 @@ if not ok then
     saveData()
 end
 
+rednet.unhost(PROTOCOL)
 rednet.close()
 print("Server stopped")
