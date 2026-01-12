@@ -6,7 +6,7 @@ local SERVER_ID = 1384
 local CONFIG_FILE = "server_config.cfg"
 local USERS_FILE = "users.dat"
 local MESSAGES_FILE = "server_messages.dat"
-local ENCRYPTION_KEY = "CC_TELEGRAM_2024_KEY" -- Change this in production!
+local ENCRYPTION_KEY = "MadeByJemmaperXDForTest" -- Change this in production!
 
 -- Server state
 local server = {
