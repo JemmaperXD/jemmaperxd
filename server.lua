@@ -2,53 +2,43 @@ local PORT = 1384
 local modem = peripheral.find("modem") or error("No modem found")
 modem.open(PORT)
 
-local users = {}
-local logs = {}
+local users = {} -- [id] = name
 
-local function encrypt(text, key)
-    local res = ""
-    for i = 1, #text do res = res .. string.char((text:byte(i) + key) % 256) end
-    return res
-end
-
-print("Server Started. ID: "..os.getComputerID())
-print("Waiting for messages...")
+print("=== SERVER STARTED ===")
+print("My ID: " .. os.getComputerID())
 
 while true do
-    local _, _, channel, replyChannel, msg = os.pullEvent("modem_message")
+    local _, _, channel, replyID, msg = os.pullEvent("modem_message")
     
-    -- Дебаг в консоль сервера
-    print("Received from "..replyChannel..": type="..(type(msg) == "table" and tostring(msg.type) or "not a table"))
+    if type(msg) == "table" and channel == PORT then
+        -- Логируем в консоль для проверки
+        print("Got " .. tostring(msg.type) .. " from ID " .. replyID)
 
-    if type(msg) == "table" then
         if msg.type == "handshake" or msg.type == "ping" then
-            users[replyChannel] = msg.user or "Unknown"
+            users[replyID] = msg.user or "Unknown"
             
-            local list = {}
-            for _, name in pairs(users) do table.insert(list, name) end
+            local names = {}
+            for _, name in pairs(users) do table.insert(names, name) end
             
-            -- Отправляем ответ, который ЖДЕТ клиент
-            modem.transmit(replyChannel, PORT, {
+            -- Шлем ответ прямо отправителю
+            modem.transmit(replyID, PORT, {
                 type = "status",
-                online = true,
-                users = list
+                users = names
             })
-            print("Sent Status to "..replyChannel)
 
         elseif msg.type == "send" then
-            local target_id = nil
+            local targetID = nil
             for id, name in pairs(users) do
-                if name == msg.to then target_id = id break end
+                if name == msg.to then targetID = id break end
             end
 
-            if target_id then
-                modem.transmit(target_id, PORT, {
+            if targetID then
+                modem.transmit(targetID, PORT, {
                     type = "msg",
                     from = msg.user,
-                    text = encrypt(msg.text, 7)
+                    text = msg.text -- Шифрование добавим когда заработает связь
                 })
-                table.insert(logs, msg.user.." -> "..msg.to)
-                print("Forwarded msg to "..msg.to)
+                print("Msg: " .. msg.user .. " -> " .. msg.to)
             end
         end
     end
