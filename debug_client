@@ -1,60 +1,51 @@
-local SERVER_ID = 114 -- Ваш ID сервера
+local SERVER_ID = 114
 local PORT = 1384
 local modem = peripheral.find("modem") or error("No modem found")
 modem.open(os.getComputerID())
 
-local username = "TestUser"
+local username = "Debugger"
 local contacts = {}
-local messages = {}
-local target_user = nil
-local input_buffer = ""
+local connected = false
 
-print("Client v5 started. My ID: " .. os.getComputerID())
+print("Debug Client v6 started.")
+print("Target Server ID: " .. SERVER_ID)
+print("My ID: " .. os.getComputerID())
+print(string.rep("-", 40))
 
-local function decrypt(text, key)
-    local res = ""
-    for i = 1, #text do res = res .. string.char((text:byte(i) - key) % 256) end
-    return res
+-- Функция отправки запроса
+local function sendHandshake()
+    modem.transmit(SERVER_ID, PORT, {type = "handshake", user = username})
+    print("Sent handshake to " .. SERVER_ID)
 end
 
--- Отправляем пинг и хендшейк в одном потоке
-local function networking_loop()
-    while true do
-        -- Пытаемся подключиться/обновить статус
-        modem.transmit(SERVER_ID, PORT, {type = "handshake", user = username})
-        sleep(2) -- Пингуем каждые 2 секунды
-    end
-end
+-- Первый запрос
+sendHandshake()
 
--- Главный цикл обработки событий и GUI
-local function main_loop()
-    while true do
-        term.clear()
-        print("TG-CC | Server: "..SERVER_ID)
-        print("Status: " .. (#contacts > 0 and "Online" or "Connecting..."))
-        print(string.rep("-", 40))
-        for i, name in ipairs(contacts) do print(" - " .. name) end
-        print(string.rep("-", 40))
-        print("Msgs: " .. #messages)
-        
-        local event, p1, p2, p3, p4 = os.pullEvent()
+while true do
+    -- Ждем ЛЮБОЕ событие
+    local event, p1, p2, p3, p4 = os.pullEvent()
 
-        if event == "char" then
-            input_buffer = input_buffer .. p1
-        elseif event == "key" then
-            if p1 == keys.backspace then input_buffer = input_buffer:sub(1, -2) end
-            -- Убираем отправку, пока не заработает основная связь
-        elseif event == "modem_message" and p3 == SERVER_ID then
-            -- Печатаем в консоль полученные данные для отладки
-            print("DEBUG: Got message from Server ID " .. p3 .. ": " .. tostring(p4.type))
-            
-            if p4.type == "status" then 
-                contacts = p4.users
-            elseif p4.type == "msg" then 
-                table.insert(messages, {from=p4.from, text=decrypt(p4.text, 7)})
+    if event == "modem_message" and p3 == SERVER_ID and type(p4) == "table" then
+        if p4.type == "status" then
+            if not connected then
+                print("SUCCESS: Connected to server! Status received.")
+                connected = true
             end
+            contacts = p4.users
+            print("Current online users: " .. table.concat(contacts, ", "))
+            
+        elseif p4.type == "msg" then
+            print("MESSAGE from " .. p4.from .. ": " .. p4.text)
+        end
+    
+    elseif event == "timer" and p1 == timer_id then
+        -- Если таймер сработал, а ответа нет
+        if not connected then
+             print("STATUS: Still waiting for server response...")
+             sendHandshake() -- Повторяем запрос
         end
     end
+    
+    -- Устанавливаем таймер для повторной попытки или проверки статуса
+    timer_id = os.startTimer(3)
 end
-
-parallel.waitForAll(networking_loop, main_loop)
