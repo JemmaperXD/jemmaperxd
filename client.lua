@@ -14,6 +14,7 @@ local modemSide = nil
 local serverId = nil
 local serverName = nil
 local connected = false
+local connectionError = nil
 local lastPing = 0
 local messageQueue = {}
 local contacts = {}
@@ -25,7 +26,9 @@ local uiState = {
     messageScroll = 0,
     inputText = "",
     inputCursor = 1,
-    showHelp = false
+    showHelp = false,
+    showError = false,
+    errorMessage = ""
 }
 
 -- Colors
@@ -36,6 +39,7 @@ local colors = {
     highlight = colors.blue,
     error = colors.red,
     success = colors.green,
+    warning = colors.yellow,
     timestamp = colors.lightGray,
     unread = colors.yellow
 }
@@ -182,33 +186,46 @@ local function connectToServer()
         return false, "Server not found"
     end
     
-    local response = rednet.send(serverId, {
+    -- Send registration request
+    local success = rednet.send(serverId, {
         type = "register",
         clientName = clientName,
         timestamp = os.time()
     }, PROTOCOL)
     
-    if not response then
-        return false, "Send error"
+    if not success then
+        return false, "Failed to send registration"
     end
     
     -- Wait for response
     local startTime = os.time()
-    while os.time() - startTime < 5 do
-        local senderId, message, protocol = rednet.receive(PROTOCOL, 1)
-        if senderId == serverId and message.type == "register_ack" then
-            serverName = message.serverName
-            contacts = message.clients or {}
-            connected = true
-            lastPing = os.time()
-            
-            -- Load messages
-            rednet.send(serverId, {
-                type = "get_messages",
-                unreadOnly = false
-            }, PROTOCOL)
-            
-            return true, "Connected to: " .. serverName
+    while os.time() - startTime < 10 do
+        local senderId, message, protocol = rednet.receive(PROTOCOL, 0.5)
+        if senderId and senderId == serverId and protocol == PROTOCOL then
+            if message.type == "register_ack" then
+                serverName = message.serverName
+                contacts = message.clients or {}
+                connected = true
+                connectionError = nil
+                lastPing = os.time()
+                
+                -- Load messages
+                rednet.send(serverId, {
+                    type = "get_messages",
+                    unreadOnly = false
+                }, PROTOCOL)
+                
+                return true, "Connected to: " .. serverName
+            elseif message.type == "register_error" then
+                return false, "Registration error: " .. (message.message or "Unknown error")
+            elseif message.type == "error" then
+                return false, "Error: " .. (message.message or "Unknown error")
+            end
+        end
+        
+        -- Check timeout
+        if os.time() - startTime >= 10 then
+            break
         end
     end
     
@@ -218,12 +235,17 @@ end
 local function sendPing()
     if not connected then return end
     
-    rednet.send(serverId, {
+    local success = rednet.send(serverId, {
         type = "ping",
         timestamp = os.time()
     }, PROTOCOL)
     
-    lastPing = os.time()
+    if success then
+        lastPing = os.time()
+    else
+        connected = false
+        connectionError = "Failed to send ping"
+    end
 end
 
 local function sendMessage(text)
@@ -235,12 +257,16 @@ local function sendMessage(text)
         return false, "Message cannot be empty"
     end
     
-    rednet.send(serverId, {
+    local success = rednet.send(serverId, {
         type = "send_message",
         recipientId = selectedContact,
         text = text,
         timestamp = os.time()
     }, PROTOCOL)
+    
+    if not success then
+        return false, "Failed to send message"
+    end
     
     -- Add locally for instant display
     local message = {
@@ -260,7 +286,7 @@ local function sendMessage(text)
     
     uiState.messageScroll = math.max(0, #messages[selectedContact] - 10)
     
-    return true
+    return true, "Message sent"
 end
 
 local function formatTime(timestamp)
@@ -310,7 +336,7 @@ local function drawSidebar()
         term.setTextColor(colors.success)
         term.write("✓ ")
         term.setTextColor(colors.text)
-        term.write(serverName)
+        term.write(serverName or "Server")
     else
         term.setCursorPos(1, 2)
         term.setTextColor(colors.error)
@@ -321,12 +347,18 @@ local function drawSidebar()
     term.setTextColor(colors.timestamp)
     term.write("You: " .. clientName)
     
-    term.setCursorPos(1, 5)
+    if connectionError then
+        term.setCursorPos(1, 4)
+        term.setTextColor(colors.error)
+        term.write("Error: " .. connectionError:sub(1, width-8))
+    end
+    
+    term.setCursorPos(1, 6)
     term.setTextColor(colors.text)
     term.write("---")
     
     -- Contacts list
-    local startY = 6
+    local startY = 7
     local i = 1
     
     for contactId, contact in pairs(contacts) do
@@ -364,7 +396,7 @@ local function drawSidebar()
             term.setTextColor(colors.text)
             
             -- Name
-            local displayName = contact.name
+            local displayName = contact.name or "Unknown"
             if #displayName > width - 3 then
                 displayName = displayName:sub(1, width - 6) .. "..."
             end
@@ -387,6 +419,19 @@ local function drawChatArea()
     for y = 1, height do
         term.setCursorPos(sidebarWidth + 1, y)
         term.clearLine()
+    end
+    
+    if not connected then
+        term.setCursorPos(sidebarWidth + width/2 - 15, height/2 - 1)
+        term.setTextColor(colors.warning)
+        term.write("Not connected to server")
+        
+        if connectionError then
+            term.setCursorPos(sidebarWidth + width/2 - #connectionError/2, height/2 + 1)
+            term.setTextColor(colors.error)
+            term.write(connectionError)
+        end
+        return
     end
     
     if not selectedContact then
@@ -464,6 +509,19 @@ local function drawInputArea()
     -- Input field
     local inputY = height - inputHeight + 2
     term.setCursorPos(sidebarWidth + 1, inputY)
+    
+    if not connected then
+        term.setTextColor(colors.warning)
+        term.write("Not connected. Reconnecting...")
+        return
+    end
+    
+    if not selectedContact then
+        term.setTextColor(colors.text)
+        term.write("Select a contact first")
+        return
+    end
+    
     term.setTextColor(colors.text)
     term.write("> ")
     
@@ -505,7 +563,7 @@ local function drawHelp()
     term.setCursorPos(1, 5)
     term.write("Up/Down    Scroll contacts")
     term.setCursorPos(1, 6)
-    term.write("Enter      Select contact")
+    term.write("Enter      Select contact/send")
     term.setCursorPos(1, 7)
     term.write("PgUp/PgDn  Scroll messages")
     term.setCursorPos(1, 8)
@@ -587,7 +645,12 @@ local function handleServerMessage(message)
         -- Keep alive
         
     elseif message.type == "error" then
-        print("Server error: " .. message.message)
+        print("Server error: " .. (message.message or "Unknown error"))
+        if message.message and (message.message:find("not registered") or message.message:find("Client not registered")) then
+            connected = false
+            connectionError = "Not registered. Reconnecting..."
+            print("Reconnecting...")
+        end
     end
 end
 
@@ -606,54 +669,60 @@ local function main()
     print("Messenger client starting...")
     print("Client name: " .. clientName)
     
-    -- Find and connect to server
-    local connectedMessage = ""
-    while not connected do
-        if findServer() then
-            local success, msg = connectToServer()
-            connectedMessage = msg
-            if success then
-                print(msg)
-                break
-            else
-                print("Connection failed: " .. msg)
-            end
-        else
-            print("Searching for server...")
-        end
-        sleep(RECONNECT_INTERVAL)
-    end
-    
     -- Main event loop
     local lastPingTime = os.time()
+    local lastReconnectAttempt = os.time()
+    
     term.clear()
-    drawUI()
     
     while true do
+        -- Handle reconnection if not connected
+        if not connected then
+            local currentTime = os.time()
+            if currentTime - lastReconnectAttempt >= RECONNECT_INTERVAL then
+                print("Attempting to connect...")
+                if findServer() then
+                    local success, msg = connectToServer()
+                    if success then
+                        print(msg)
+                        connectionError = nil
+                    else
+                        connectionError = msg
+                        print("Connection failed: " .. msg)
+                    end
+                else
+                    connectionError = "Server not found"
+                    print("Server not found. Retrying...")
+                end
+                lastReconnectAttempt = currentTime
+            end
+        end
+        
         -- Handle rednet messages
         local senderId, message, protocol = rednet.receive(PROTOCOL, 0.1)
         if senderId and protocol == PROTOCOL then
-            handleServerMessage(message)
+            if senderId == serverId then
+                handleServerMessage(message)
+            end
         end
         
-        -- Send ping
+        -- Send ping if connected
         if connected and os.time() - lastPingTime > PING_INTERVAL then
             sendPing()
             lastPingTime = os.time()
         end
         
         -- Handle events
-        local event, p1, p2, p3 = os.pullEventRaw()
+        local event, p1, p2, p3 = os.pullEventRaw(0.1)
         
         if event == "rednet_message" then
             local sId, msg, proto = p1, p2, p3
-            if proto == PROTOCOL then
+            if proto == PROTOCOL and sId == serverId then
                 handleServerMessage(msg)
             end
             
         elseif event == "key" then
             local key = p1
-            local held = p2
             
             if key == 20 then -- Ctrl+T
                 break
@@ -672,8 +741,11 @@ local function main()
                             unreadCount[contactId] = 0
                             break
                         end
-                    elseif uiState.inputText ~= "" and selectedContact then
-                        sendMessage(uiState.inputText)
+                    elseif uiState.inputText ~= "" and selectedContact and connected then
+                        local success, msg = sendMessage(uiState.inputText)
+                        if not success then
+                            print("Failed to send: " .. msg)
+                        end
                         uiState.inputText = ""
                         uiState.inputCursor = 1
                     end
@@ -702,7 +774,7 @@ local function main()
             end
             
         elseif event == "char" then
-            if not uiState.showHelp then
+            if not uiState.showHelp and connected then
                 uiState.inputText = uiState.inputText .. p1
                 uiState.inputCursor = uiState.inputCursor + 1
             end
@@ -713,7 +785,7 @@ local function main()
             
             if x <= sidebarWidth then
                 -- Click in sidebar
-                local contactIndex = y - 5 + uiState.contactScroll
+                local contactIndex = y - 6 + uiState.contactScroll
                 local i = 1
                 for contactId, _ in pairs(contacts) do
                     if i == contactIndex then
@@ -752,5 +824,10 @@ local function main()
     print("Client stopped")
 end
 
--- Start
-main()
+-- Start with error handling
+local success, err = pcall(main)
+if not success then
+    print("Client crashed with error: " .. err)
+    print("Press any key to exit...")
+    os.pullEvent("key")
+end
