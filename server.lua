@@ -1,480 +1,484 @@
--- Messenger server for ComputerCraft: Tweaked
--- Run: server [--name <name>] [--side <side>]
+-- Telegram Server for CC:Tweaked
+-- Modem ID: 1384
+-- Handles message routing, encryption, and delivery confirmation
 
--- Configuration
-local PROTOCOL = "messenger_v2"
-local CONFIG_FILE = "messenger_server.cfg"
-local DATA_FILE = "messenger_data.dat"
-local PING_TIMEOUT = 30 -- seconds
-local SAVE_INTERVAL = 60 -- seconds
+local SERVER_ID = 1384
+local CONFIG_FILE = "server_config.cfg"
+local USERS_FILE = "users.dat"
+local MESSAGES_FILE = "server_messages.dat"
+local ENCRYPTION_KEY = "CC_TELEGRAM_2024_KEY" -- Change this in production!
 
--- Global variables
-local serverName = "Chat Server"
-local modemSide = nil
-local connectedClients = {}
-local messages = {}
-local lastPing = {}
-local shouldSave = false
-local lastSaveTime = os.time()
+-- Server state
+local server = {
+    users = {}, -- {username = {address, online, lastSeen}}
+    messages = {}, -- {messageId = {from, to, text, time, status}}
+    nextMessageId = 1,
+    modem = nil,
+    isRunning = true,
+    onlineUsers = {}
+}
 
--- Parse command line arguments
-local args = {...}
-for i = 1, #args do
-    if args[i] == "-n" or args[i] == "--name" then
-        serverName = args[i+1] or serverName
-    elseif args[i] == "-s" or args[i] == "--side" then
-        modemSide = args[i+1]
-    elseif args[i] == "-h" or args[i] == "--help" then
-        print("Usage: server [options]")
-        print("Options:")
-        print("  -n, --name <name>    Server name")
-        print("  -s, --side <side>    Modem side")
-        print("  -h, --help           Show this help")
-        return
+-- Simple XOR encryption
+local function encrypt(text, key)
+    local result = ""
+    local keyLen = #key
+    for i = 1, #text do
+        local charCode = string.byte(text, i)
+        local keyChar = string.byte(key, (i - 1) % keyLen + 1)
+        local encryptedChar = bit32.bxor(charCode, keyChar)
+        result = result .. string.char(encryptedChar)
     end
+    return result
 end
 
--- File handling functions
-local function loadConfig()
-    if fs.exists(CONFIG_FILE) then
-        local file = fs.open(CONFIG_FILE, "r")
-        local data = textutils.unserialize(file.readAll())
-        file.close()
-        return data or {}
-    end
-    return {}
+-- Simple XOR decryption
+local function decrypt(encryptedText, key)
+    return encrypt(encryptedText, key) -- XOR is symmetric
 end
 
-local function saveConfig(config)
-    local file = fs.open(CONFIG_FILE, "w")
-    file.write(textutils.serialize(config))
-    file.close()
+-- Convert string to hex for transmission
+local function toHex(str)
+    return (str:gsub('.', function(c)
+        return string.format('%02X', string.byte(c))
+    end))
 end
 
-local function loadData()
-    if fs.exists(DATA_FILE) then
-        local file = fs.open(DATA_FILE, "r")
-        local data = textutils.unserialize(file.readAll())
-        file.close()
-        return data or {messages = {}, clients = {}}
-    end
-    return {messages = {}, clients = {}}
+-- Convert hex back to string
+local function fromHex(hex)
+    return (hex:gsub('..', function(cc)
+        return string.char(tonumber(cc, 16))
+    end))
 end
 
-local function saveData()
-    local data = {
-        messages = messages,
-        clients = connectedClients,
-        timestamp = os.time()
-    }
-    local file = fs.open(DATA_FILE, "w")
-    file.write(textutils.serialize(data))
-    file.close()
-    shouldSave = false
-    lastSaveTime = os.time()
-    print("Data saved to " .. DATA_FILE)
-end
-
--- Find modem
-local function findModem()
-    if modemSide then
-        if peripheral.getType(modemSide) == "modem" then
-            return true
-        else
-            print("Error: No modem found on side: " .. modemSide)
-            return false
-        end
-    end
-    
-    local sides = {"top", "bottom", "left", "right", "front", "back"}
-    for _, side in ipairs(sides) do
+-- Initialize modem
+local function initModem()
+    for _, side in pairs(peripheral.getNames()) do
         if peripheral.getType(side) == "modem" then
-            modemSide = side
-            return true
+            server.modem = peripheral.wrap(side)
+            if server.modem then
+                server.modem.open(SERVER_ID)
+                print("Server modem initialized on side: " .. side)
+                print("Server ID: " .. SERVER_ID)
+                return true
+            end
         end
     end
-    
-    print("Error: No wireless modem found!")
-    print("Attach a modem to any side of the computer.")
     return false
 end
 
--- Validate client
-local function validateClient(clientId, clientName)
-    if not clientId then
-        return false, "Invalid client ID"
-    end
-    
-    if not clientName or clientName == "" then
-        return false, "Client name cannot be empty"
-    end
-    
-    if #clientName > 20 then
-        return false, "Client name too long (max 20 chars)"
-    end
-    
-    -- Check for duplicate name
-    for id, client in pairs(connectedClients) do
-        if client.name == clientName and id ~= clientId then
-            return false, "Client name already in use"
+-- Load server data
+local function loadData()
+    -- Load users
+    if fs.exists(USERS_FILE) then
+        local file = fs.open(USERS_FILE, "r")
+        local data = file.readAll()
+        file.close()
+        if data ~= "" then
+            server.users = textutils.unserialize(data) or {}
         end
     end
     
-    return true
+    -- Load messages
+    if fs.exists(MESSAGES_FILE) then
+        local file = fs.open(MESSAGES_FILE, "r")
+        local data = file.readAll()
+        file.close()
+        if data ~= "" then
+            local saved = textutils.unserialize(data) or {}
+            server.messages = saved.messages or {}
+            server.nextMessageId = saved.nextMessageId or 1
+        end
+    end
+    
+    print("Loaded " .. #server.users .. " users and " .. #server.messages .. " messages")
 end
 
--- Message handlers
-local function handleRegister(senderId, data)
-    local valid, errorMsg = validateClient(senderId, data.clientName)
-    if not valid then
-        print("Registration failed for " .. senderId .. ": " .. errorMsg)
-        return {
-            type = "register_error",
-            message = errorMsg
-        }
+-- Save server data
+local function saveData()
+    -- Save users
+    local file = fs.open(USERS_FILE, "w")
+    file.write(textutils.unserialize(server.users))
+    file.close()
+    
+    -- Save messages
+    local file = fs.open(MESSAGES_FILE, "w")
+    local data = {
+        messages = server.messages,
+        nextMessageId = server.nextMessageId
+    }
+    file.write(textutils.unserialize(data))
+    file.close()
+end
+
+-- Register new user
+local function registerUser(username, modemSide)
+    if server.users[username] then
+        return false, "User already exists"
     end
     
-    -- Check if client already registered
-    if connectedClients[senderId] then
-        -- Update existing client
-        connectedClients[senderId].name = data.clientName
-        connectedClients[senderId].lastSeen = os.time()
-        connectedClients[senderId].status = "online"
-        
-        print("Client reconnected: " .. data.clientName .. " (" .. senderId .. ")")
-        
-        return {
-            type = "register_ack",
-            serverName = serverName,
-            clients = connectedClients,
-            message = "Reconnected successfully"
-        }
-    end
-    
-    -- Register new client
-    connectedClients[senderId] = {
-        name = data.clientName,
+    server.users[username] = {
+        address = modemSide,
+        online = true,
         lastSeen = os.time(),
-        status = "online"
+        status = "Online"
     }
     
-    -- Initialize for new clients
-    if not messages[senderId] then
-        messages[senderId] = {
-            inbox = {},
-            outbox = {},
-            unread = 0
-        }
-    end
+    server.onlineUsers[username] = modemSide
     
-    lastPing[senderId] = os.time()
-    
-    print("New client registered: " .. data.clientName .. " (" .. senderId .. ")")
-    
-    -- Notify all about new client
-    for clientId, _ in pairs(connectedClients) do
-        if clientId ~= senderId then
-            rednet.send(clientId, {
-                type = "client_online",
-                clientId = senderId,
-                clientName = data.clientName
-            }, PROTOCOL)
-        end
-    end
-    
-    return {
-        type = "register_ack",
-        serverName = serverName,
-        clients = connectedClients,
-        message = "Registration successful"
-    }
+    print("User registered: " .. username)
+    saveData()
+    return true, "Registration successful"
 end
 
-local function handleSendMessage(senderId, data)
-    if not connectedClients[senderId] then
-        return {
-            type = "error",
-            message = "Client not registered. Please register first."
-        }
+-- Update user status
+local function updateUserStatus(username, modemSide)
+    if server.users[username] then
+        server.users[username].online = true
+        server.users[username].lastSeen = os.time()
+        server.users[username].address = modemSide
+        server.onlineUsers[username] = modemSide
+        return true
+    end
+    return false
+end
+
+-- Process and route message
+local function processMessage(sender, recipient, messageText)
+    -- Check if recipient exists
+    if not server.users[recipient] then
+        return false, "Recipient not found"
     end
     
-    local recipientId = data.recipientId
-    if not recipientId then
-        return {
-            type = "error",
-            message = "No recipient specified"
-        }
+    -- Check if recipient is online
+    if not server.onlineUsers[recipient] then
+        return false, "Recipient is offline"
     end
     
-    if not connectedClients[recipientId] then
-        return {
-            type = "error", 
-            message = "Recipient not found"
-        }
-    end
+    -- Create message record
+    local messageId = server.nextMessageId
+    server.nextMessageId = server.nextMessageId + 1
     
-    if not data.text or data.text == "" then
-        return {
-            type = "error",
-            message = "Message text cannot be empty"
-        }
-    end
-    
-    -- Initialize message storage if needed
-    if not messages[senderId] then
-        messages[senderId] = {inbox = {}, outbox = {}, unread = 0}
-    end
-    
-    if not messages[recipientId] then
-        messages[recipientId] = {inbox = {}, outbox = {}, unread = 0}
-    end
-    
-    local message = {
-        id = #messages[recipientId].inbox + 1,
-        senderId = senderId,
-        senderName = connectedClients[senderId].name,
-        recipientId = recipientId,
-        text = data.text,
-        timestamp = os.time(),
-        read = false
+    local messageData = {
+        id = messageId,
+        from = sender,
+        to = recipient,
+        text = messageText,
+        time = os.time(),
+        status = "sent", -- sent, delivered, read
+        encrypted = toHex(encrypt(messageText, ENCRYPTION_KEY))
     }
     
-    -- Save to sender's outbox
-    table.insert(messages[senderId].outbox, message)
-    
-    -- Save to recipient's inbox
-    table.insert(messages[recipientId].inbox, message)
-    messages[recipientId].unread = (messages[recipientId].unread or 0) + 1
-    
-    print("Message from " .. connectedClients[senderId].name .. 
-          " to " .. connectedClients[recipientId].name .. 
-          ": " .. (data.text:sub(1, 20) .. (#data.text > 20 and "..." or "")))
+    -- Store message
+    server.messages[messageId] = messageData
     
     -- Send to recipient
-    rednet.send(recipientId, {
-        type = "new_message",
-        message = message
-    }, PROTOCOL)
+    local recipientAddress = server.onlineUsers[recipient]
     
-    shouldSave = true
-    
-    return {
-        type = "message_ack",
-        messageId = message.id,
-        timestamp = message.timestamp
+    local deliveryPacket = {
+        type = "message",
+        messageId = messageId,
+        from = sender,
+        encryptedText = messageData.encrypted,
+        timestamp = messageData.time
     }
-end
-
-local function handleGetOnline(senderId, data)
-    if not connectedClients[senderId] then
-        return {
-            type = "error",
-            message = "Client not registered"
-        }
-    end
     
-    return {
-        type = "online_list",
-        clients = connectedClients,
-        count = #connectedClients
+    -- Send message
+    server.modem.transmit(SERVER_ID, SERVER_ID, deliveryPacket)
+    
+    -- Send confirmation to sender
+    local confirmationPacket = {
+        type = "confirmation",
+        messageId = messageId,
+        status = "sent_to_server"
     }
+    
+    server.modem.transmit(SERVER_ID, SERVER_ID, confirmationPacket)
+    
+    print("Message " .. messageId .. " sent from " .. sender .. " to " .. recipient)
+    saveData()
+    
+    return true, messageId
 end
 
-local function handleGetMessages(senderId, data)
-    if not connectedClients[senderId] then
-        return {
-            type = "error",
-            message = "Client not registered"
-        }
-    end
-    
-    local clientMessages = messages[senderId]
-    if not clientMessages then
-        clientMessages = {inbox = {}, outbox = {}, unread = 0}
-        messages[senderId] = clientMessages
-    end
-    
-    local unreadOnly = data.unreadOnly
-    local result = {}
-    
-    if unreadOnly then
-        for _, msg in ipairs(clientMessages.inbox) do
-            if not msg.read then
-                table.insert(result, msg)
-                msg.read = true
-            end
-        end
-        clientMessages.unread = 0
-    else
-        result = clientMessages.inbox
-    end
-    
-    shouldSave = true
-    
-    return {
-        type = "messages",
-        messages = result,
-        unread = clientMessages.unread or 0
-    }
-end
-
-local function handlePing(senderId, data)
-    if connectedClients[senderId] then
-        lastPing[senderId] = os.time()
-        connectedClients[senderId].lastSeen = os.time()
-        connectedClients[senderId].status = "online"
-    end
-    
-    return {
-        type = "pong",
-        timestamp = os.time(),
-        serverTime = os.time()
-    }
-end
-
--- Main message handler
-local function handleMessage(senderId, message, protocol)
-    if protocol ~= PROTOCOL then
-        return
-    end
-    
-    if not message or not message.type then
-        rednet.send(senderId, {
-            type = "error",
-            message = "Invalid message format"
-        }, PROTOCOL)
-        return
-    end
-    
-    local response
-    
-    if message.type == "register" then
-        response = handleRegister(senderId, message)
-    elseif message.type == "send_message" then
-        response = handleSendMessage(senderId, message)
-    elseif message.type == "get_online" then
-        response = handleGetOnline(senderId, message)
-    elseif message.type == "get_messages" then
-        response = handleGetMessages(senderId, message)
-    elseif message.type == "ping" then
-        response = handlePing(senderId, message)
-    else
-        response = {
-            type = "error",
-            message = "Unknown message type: " .. tostring(message.type)
-        }
-    end
-    
-    if response then
-        local success = rednet.send(senderId, response, PROTOCOL)
-        if not success then
-            print("Failed to send response to client " .. senderId)
-        end
-    end
-end
-
--- Cleanup inactive clients
-local function cleanupClients()
-    local currentTime = os.time()
-    local toRemove = {}
-    
-    for clientId, lastSeen in pairs(lastPing) do
-        if currentTime - lastSeen > PING_TIMEOUT then
-            table.insert(toRemove, clientId)
-        end
-    end
-    
-    for _, clientId in ipairs(toRemove) do
-        if connectedClients[clientId] then
-            local clientName = connectedClients[clientId].name
-            connectedClients[clientId] = nil
-            lastPing[clientId] = nil
-            
-            print("Client timed out: " .. clientName .. " (" .. clientId .. ")")
-            
-            -- Notify about client disconnect
-            for otherId, _ in pairs(connectedClients) do
-                rednet.send(otherId, {
-                    type = "client_offline",
-                    clientId = clientId,
-                    clientName = clientName
-                }, PROTOCOL)
-            end
-        end
-    end
-end
-
--- Main loop
-local function main()
-    -- Check modem
-    if not findModem() then
-        print("Error: Wireless modem not found!")
-        print("Place modem on any side of computer")
-        return
-    end
-    
-    -- Initialize modem
-    rednet.open(modemSide)
-    rednet.host(PROTOCOL, serverName)
-    
-    print("Messenger server started")
-    print("Server name: " .. serverName)
-    print("Protocol: " .. PROTOCOL)
-    print("Modem side: " .. modemSide)
-    print("For exit press Ctrl+T")
-    print()
-    
-    -- Load data
-    local loadedData = loadData()
-    messages = loadedData.messages or {}
-    connectedClients = loadedData.clients or {}
-    
-    -- Restore lastPing and mark as offline initially
-    for clientId, client in pairs(connectedClients) do
-        lastPing[clientId] = client.lastSeen or os.time()
-        client.status = "offline" -- Mark as offline until they ping
-        print("Loaded client: " .. (client.name or "Unknown") .. " (offline)")
-    end
-    
-    print("Server ready. Waiting for connections...")
-    
-    -- Main event loop
-    local cleanupTimer = os.startTimer(10)
-    local saveTimer = os.startTimer(SAVE_INTERVAL)
-    
-    while true do
-        local event, param1, param2, param3 = os.pullEvent()
+-- Mark message as delivered
+local function markMessageDelivered(messageId, clientAddress)
+    if server.messages[messageId] then
+        server.messages[messageId].status = "delivered"
+        server.messages[messageId].deliveredTime = os.time()
         
-        if event == "rednet_message" then
-            local senderId, message, protocol = param1, param2, param3
-            handleMessage(senderId, message, protocol)
-            
-        elseif event == "timer" then
-            local timerId = param1
-            
-            if timerId == cleanupTimer then
-                cleanupClients()
-                cleanupTimer = os.startTimer(10)
+        -- Notify sender
+        local sender = server.messages[messageId].from
+        if server.onlineUsers[sender] then
+            local notification = {
+                type = "delivery_report",
+                messageId = messageId,
+                status = "delivered",
+                timestamp = os.time()
+            }
+            server.modem.transmit(SERVER_ID, SERVER_ID, notification)
+        end
+        
+        saveData()
+        return true
+    end
+    return false
+end
+
+-- Mark message as read
+local function markMessageRead(messageId)
+    if server.messages[messageId] then
+        server.messages[messageId].status = "read"
+        server.messages[messageId].readTime = os.time()
+        
+        -- Notify sender
+        local sender = server.messages[messageId].from
+        if server.onlineUsers[sender] then
+            local notification = {
+                type = "read_report",
+                messageId = messageId,
+                status = "read",
+                timestamp = os.time()
+            }
+            server.modem.transmit(SERVER_ID, SERVER_ID, notification)
+        end
+        
+        saveData()
+        return true
+    end
+    return false
+end
+
+-- Get user list (for client requests)
+local function getUserList()
+    local users = {}
+    for username, data in pairs(server.users) do
+        table.insert(users, {
+            username = username,
+            online = data.online,
+            status = data.status,
+            lastSeen = data.lastSeen
+        })
+    end
+    return users
+end
+
+-- Get offline messages for user
+local function getOfflineMessages(username)
+    local offlineMessages = {}
+    for id, message in pairs(server.messages) do
+        if message.to == username and message.status == "sent" then
+            table.insert(offlineMessages, {
+                id = message.id,
+                from = message.from,
+                encryptedText = message.encrypted,
+                timestamp = message.time
+            })
+        end
+    end
+    return offlineMessages
+end
+
+-- Process incoming packets
+local function processPackets()
+    print("Server started. Listening for connections...")
+    
+    while server.isRunning do
+        local event, modemSide, senderChannel, replyChannel, message, senderDistance = os.pullEvent("modem_message")
+        
+        if message and message.type then
+            -- Handle registration
+            if message.type == "register" then
+                local username = message.username
+                local success, result = registerUser(username, modemSide)
                 
-            elseif timerId == saveTimer then
-                if shouldSave and os.time() - lastSaveTime > SAVE_INTERVAL then
+                local response = {
+                    type = "register_response",
+                    success = success,
+                    message = result,
+                    serverId = SERVER_ID
+                }
+                
+                server.modem.transmit(SERVER_ID, SERVER_ID, response)
+                print("Registration attempt: " .. username .. " - " .. tostring(success))
+            
+            -- Handle login/status update
+            elseif message.type == "login" then
+                local username = message.username
+                local updated = updateUserStatus(username, modemSide)
+                
+                -- Send offline messages if any
+                local offlineMessages = getOfflineMessages(username)
+                
+                local response = {
+                    type = "login_response",
+                    success = updated,
+                    offlineMessages = offlineMessages,
+                    serverTime = os.time()
+                }
+                
+                server.modem.transmit(SERVER_ID, SERVER_ID, response)
+                
+                if updated then
+                    print("User logged in: " .. username)
+                end
+            
+            -- Handle message sending
+            elseif message.type == "send_message" then
+                local sender = message.sender
+                local recipient = message.recipient
+                local text = message.text
+                
+                -- Verify sender is registered
+                if not server.users[sender] then
+                    local errorResponse = {
+                        type = "error",
+                        error = "Sender not registered"
+                    }
+                    server.modem.transmit(SERVER_ID, SERVER_ID, errorResponse)
+                else
+                    local success, result = processMessage(sender, recipient, text)
+                    
+                    local response = {
+                        type = "send_response",
+                        success = success,
+                        messageId = result,
+                        error = not success and result or nil
+                    }
+                    
+                    server.modem.transmit(SERVER_ID, SERVER_ID, response)
+                end
+            
+            -- Handle message delivery confirmation
+            elseif message.type == "delivery_confirm" then
+                local messageId = message.messageId
+                markMessageDelivered(messageId, modemSide)
+                print("Message " .. messageId .. " delivered")
+            
+            -- Handle message read confirmation
+            elseif message.type == "read_confirm" then
+                local messageId = message.messageId
+                markMessageRead(messageId)
+                print("Message " .. messageId .. " read")
+            
+            -- Handle user list request
+            elseif message.type == "get_users" then
+                local users = getUserList()
+                local response = {
+                    type = "users_list",
+                    users = users
+                }
+                server.modem.transmit(SERVER_ID, SERVER_ID, response)
+            
+            -- Handle ping
+            elseif message.type == "ping" then
+                local response = {
+                    type = "pong",
+                    serverTime = os.time(),
+                    onlineUsers = #server.onlineUsers
+                }
+                server.modem.transmit(SERVER_ID, SERVER_ID, response)
+            
+            -- Handle logout
+            elseif message.type == "logout" then
+                local username = message.username
+                if server.users[username] then
+                    server.users[username].online = false
+                    server.onlineUsers[username] = nil
+                    print("User logged out: " .. username)
                     saveData()
                 end
-                saveTimer = os.startTimer(SAVE_INTERVAL)
             end
-            
-        elseif event == "key" and param1 == 20 then -- Ctrl+T
-            break
+        end
+        
+        -- Auto-save every 30 seconds
+        if os.time() % 30 == 0 then
+            saveData()
         end
     end
+end
+
+-- Server console interface
+local function serverConsole()
+    while server.isRunning do
+        print("\n=== Server Commands ===")
+        print("1. Show online users")
+        print("2. Show all users")
+        print("3. Show message statistics")
+        print("4. Save data")
+        print("5. Shutdown server")
+        print("======================")
+        write("Command: ")
+        
+        local command = read()
+        
+        if command == "1" then
+            print("\nOnline Users (" .. #server.onlineUsers .. "):")
+            for username, _ in pairs(server.onlineUsers) do
+                print("  - " .. username)
+            end
+        
+        elseif command == "2" then
+            print("\nAll Registered Users:")
+            for username, data in pairs(server.users) do
+                local status = data.online and "Online" or "Offline"
+                print("  - " .. username .. " (" .. status .. ")")
+            end
+        
+        elseif command == "3" then
+            local sent = 0
+            local delivered = 0
+            local read = 0
+            
+            for _, msg in pairs(server.messages) do
+                if msg.status == "sent" then sent = sent + 1
+                elseif msg.status == "delivered" then delivered = delivered + 1
+                elseif msg.status == "read" then read = read + 1 end
+            end
+            
+            print("\nMessage Statistics:")
+            print("  Total messages: " .. (server.nextMessageId - 1))
+            print("  Sent: " .. sent)
+            print("  Delivered: " .. delivered)
+            print("  Read: " .. read)
+        
+        elseif command == "4" then
+            saveData()
+            print("Data saved successfully")
+        
+        elseif command == "5" then
+            print("Shutting down server...")
+            saveData()
+            server.isRunning = false
+            break
+        end
+        
+        sleep(1)
+    end
+end
+
+-- Main server function
+local function main()
+    print("=== Telegram Server ===")
+    print("Initializing...")
     
-    -- Clean shutdown
-    print("Shutting down server...")
-    saveData()
-    rednet.unhost(PROTOCOL, serverName)
-    rednet.close(modemSide)
+    -- Initialize modem
+    if not initModem() then
+        print("ERROR: No modem found!")
+        print("Please attach a modem to the server")
+        return
+    end
+    
+    -- Load data
+    loadData()
+    
+    -- Start server processes
+    parallel.waitForAny(
+        function() processPackets() end,
+        function() serverConsole() end
+    )
+    
     print("Server stopped")
 end
 
--- Start
+-- Run server
 main()
