@@ -1,16 +1,16 @@
-local modem = peripheral.find("modem") or error("No modem found")
-local SERVER_ID = 114
+local SERVER_ID = 114 -- !!! ЖЕСТКО ПРОПИСАННЫЙ ID СЕРВЕРА !!!
 local PORT = 1384
+local modem = peripheral.find("modem") or error("No modem found")
 modem.open(os.getComputerID())
 
--- Имя пользователя
+-- Определение имени пользователя
 local username = "Guest"
 if fs.exists(".User") then
     local files = fs.list(".User")
     for _, f in ipairs(files) do if not f:match("^%.") then username = f break end end
 end
 
--- Проверка связи
+-- Проверка подключения к серверу при запуске
 term.clear()
 print("Connecting to Server " .. SERVER_ID .. "...")
 modem.transmit(SERVER_ID, PORT, {type = "handshake", user = username})
@@ -22,10 +22,11 @@ while not ok do
     elseif e == "timer" and p1 == t then error("Server offline!") end
 end
 
+-- GUI и Логика Чата (Telegram Style)
 local contacts, messages = {}, {}
 local target_user, input_buffer = nil, ""
 local w, h = term.getSize()
-local side_w = 12
+local side_w = 14
 local chat_win = window.create(term.current(), side_w + 2, 2, w - side_w - 2, h - 3)
 
 local function decrypt(text, key)
@@ -40,54 +41,41 @@ local function draw_gui()
     term.clear()
     term.setCursorPos(2,1)
     term.setTextColor(colors.white)
-    term.write("TG-CC | User: " .. username)
+    term.write("TG-CC | User: " .. username .. " | Server: " .. SERVER_ID)
 
     -- Сайдбар
     term.setBackgroundColor(colors.lightGray)
-    for i=2, h do
-        term.setCursorPos(1, i)
-        term.write(string.rep(" ", side_w))
-    end
+    for i=2, h do term.setCursorPos(1, i) term.write(string.rep(" ", side_w)) end
     for i, name in ipairs(contacts) do
         if i > h-2 then break end
         term.setCursorPos(1, i+1)
-        if name == target_user then
-            term.setBackgroundColor(colors.gray)
-            term.setTextColor(colors.white)
-        else
-            term.setBackgroundColor(colors.lightGray)
-            term.setTextColor(colors.black)
-        end
+        term.setBackgroundColor(name == target_user and colors.gray or colors.lightGray)
+        term.setTextColor(name == target_user and colors.white or colors.black)
         term.write(" " .. name:sub(1, side_w-1))
     end
 
-    -- Окно чата (Telegram Style)
+    -- Окно чата (Telegram Style: Me Right, Other Left)
     chat_win.setBackgroundColor(colors.black)
     chat_win.clear()
     local win_w, win_h = chat_win.getSize()
     local y_pos = win_h
     
-    -- Отрисовка сообщений с конца (снизу вверх)
     for i = #messages, 1, -1 do
         if y_pos < 1 then break end
         local m = messages[i]
         local is_my = (m.from == "Me")
         
-        -- Выравнивание
-        local x = is_my and (win_w - #m.text) or 1
-        local nick_x = is_my and (win_w - #m.from) or 1
-        
-        -- Текст сообщения
-        chat_win.setCursorPos(x, y_pos)
+        -- Текст сообщения (выравнивание)
+        chat_win.setCursorPos(is_my and (win_w - #m.text) or 1, y_pos)
         chat_win.setTextColor(colors.white)
         chat_win.write(m.text)
         y_pos = y_pos - 1
         
         -- Никнейм над сообщением
-        chat_win.setCursorPos(nick_x, y_pos)
+        chat_win.setCursorPos(is_my and (win_w - #m.from) or 1, y_pos)
         chat_win.setTextColor(is_my and colors.green or colors.cyan)
         chat_win.write(m.from)
-        y_pos = y_pos - 2 -- Пробел между блоками
+        y_pos = y_pos - 2
     end
 
     -- Поле ввода
@@ -98,7 +86,7 @@ local function draw_gui()
     term.write(prompt .. input_buffer)
 end
 
--- Параллельные процессы
+-- Параллельные процессы (Пинг и События)
 parallel.waitForAll(
     function() -- Пинг
         while true do
@@ -123,7 +111,7 @@ parallel.waitForAll(
                 if p2 <= side_w and contacts[p3-1] then
                     target_user = contacts[p3-1]
                 end
-            elseif e == "modem_message" then
+            elseif e == "modem_message" and p3 == SERVER_ID then
                 if p4.type == "status" then contacts = p4.users
                 elseif p4.type == "msg" then
                     table.insert(messages, {from=p4.from, text=decrypt(p4.text, 7)})
