@@ -96,18 +96,22 @@ end
 
 -- Validate client
 local function validateClient(clientId, clientName)
-    if not clientId or not clientName then
-        return false
+    if not clientId then
+        return false, "Invalid client ID"
     end
     
-    if connectedClients[clientId] then
-        return true
+    if not clientName or clientName == "" then
+        return false, "Client name cannot be empty"
+    end
+    
+    if #clientName > 20 then
+        return false, "Client name too long (max 20 chars)"
     end
     
     -- Check for duplicate name
     for id, client in pairs(connectedClients) do
         if client.name == clientName and id ~= clientId then
-            return false
+            return false, "Client name already in use"
         end
     end
     
@@ -116,10 +120,30 @@ end
 
 -- Message handlers
 local function handleRegister(senderId, data)
-    if not validateClient(senderId, data.clientName) then
-        return {type = "error", message = "Invalid client name"}
+    local valid, errorMsg = validateClient(senderId, data.clientName)
+    if not valid then
+        return {
+            type = "register_error",
+            message = errorMsg
+        }
     end
     
+    -- Check if client already registered
+    if connectedClients[senderId] then
+        -- Update existing client
+        connectedClients[senderId].name = data.clientName
+        connectedClients[senderId].lastSeen = os.time()
+        connectedClients[senderId].status = "online"
+        
+        return {
+            type = "register_ack",
+            serverName = serverName,
+            clients = connectedClients,
+            message = "Reconnected successfully"
+        }
+    end
+    
+    -- Register new client
     connectedClients[senderId] = {
         name = data.clientName,
         lastSeen = os.time(),
@@ -155,13 +179,26 @@ local function handleRegister(senderId, data)
 end
 
 local function handleSendMessage(senderId, data)
-    if not validateClient(senderId, nil) then
-        return {type = "error", message = "Client not registered"}
+    if not connectedClients[senderId] then
+        return {
+            type = "error",
+            message = "Client not registered. Please register first."
+        }
     end
     
     local recipientId = data.recipientId
     if not connectedClients[recipientId] then
-        return {type = "error", message = "Recipient not found"}
+        return {
+            type = "error", 
+            message = "Recipient not found"
+        }
+    end
+    
+    if not data.text or data.text == "" then
+        return {
+            type = "error",
+            message = "Message text cannot be empty"
+        }
     end
     
     local message = {
@@ -197,8 +234,11 @@ local function handleSendMessage(senderId, data)
 end
 
 local function handleGetOnline(senderId, data)
-    if not validateClient(senderId, nil) then
-        return {type = "error", message = "Client not registered"}
+    if not connectedClients[senderId] then
+        return {
+            type = "error",
+            message = "Client not registered"
+        }
     end
     
     return {
@@ -209,8 +249,11 @@ local function handleGetOnline(senderId, data)
 end
 
 local function handleGetMessages(senderId, data)
-    if not validateClient(senderId, nil) then
-        return {type = "error", message = "Client not registered"}
+    if not connectedClients[senderId] then
+        return {
+            type = "error",
+            message = "Client not registered"
+        }
     end
     
     local clientMessages = messages[senderId] or {inbox = {}, outbox = {}}
@@ -257,7 +300,7 @@ local function handleMessage(senderId, message, protocol)
         return
     end
     
-    if not message.type then
+    if not message or not message.type then
         rednet.send(senderId, {
             type = "error",
             message = "Invalid message format"
@@ -280,7 +323,7 @@ local function handleMessage(senderId, message, protocol)
     else
         response = {
             type = "error",
-            message = "Unknown message type"
+            message = "Unknown message type: " .. tostring(message.type)
         }
     end
     
@@ -337,7 +380,7 @@ local function main()
     print("Server name: " .. serverName)
     print("Protocol: " .. PROTOCOL)
     print("Modem side: " .. modemSide)
-    print("Press Ctrl+T to exit")
+    print("For exit press Ctrl+T")
     print()
     
     -- Load data
@@ -348,6 +391,7 @@ local function main()
     -- Restore lastPing
     for clientId, client in pairs(connectedClients) do
         lastPing[clientId] = client.lastSeen or os.time()
+        client.status = "offline" -- Mark as offline until they ping
     end
     
     -- Main event loop
