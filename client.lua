@@ -3,40 +3,30 @@ local SERVER_ID = 1384
 local PORT = 1384
 modem.open(os.getComputerID())
 
--- 1. ОПРЕДЕЛЕНИЕ ИМЕНИ (Auto-login)
+-- Имя пользователя
 local username = "Guest"
 if fs.exists(".User") then
     local files = fs.list(".User")
-    for _, f in ipairs(files) do
-        if not f:match("^%.") then username = f break end
-    end
+    for _, f in ipairs(files) do if not f:match("^%.") then username = f break end end
 end
 
--- 2. ПРОВЕРКА ПОДКЛЮЧЕНИЯ ПРИ ЗАПУСКЕ
-print("Connecting to TG-Server...")
+-- Проверка связи
+term.clear()
+print("Connecting to Server " .. SERVER_ID .. "...")
 modem.transmit(SERVER_ID, PORT, {type = "handshake", user = username})
-local timer = os.startTimer(3)
-local connected = false
-
-while not connected do
-    local event, p1, p2, p3, p4 = os.pullEvent()
-    if event == "modem_message" and p4.type == "status" then
-        connected = true
-    elseif event == "timer" and p1 == timer then
-        error("Could not connect to server at ID " .. SERVER_ID)
-    end
+local t = os.startTimer(3)
+local ok = false
+while not ok do
+    local e, p1, p2, p3, p4 = os.pullEvent()
+    if e == "modem_message" and p4.type == "status" then ok = true
+    elseif e == "timer" and p1 == t then error("Server offline!") end
 end
 
--- 3. GUI И ЛОГИКА ЧАТА
-local contacts = {}
-local messages = {}
-local target_user = nil
-local input_buffer = ""
-
+local contacts, messages = {}, {}
+local target_user, input_buffer = nil, ""
 local w, h = term.getSize()
-local side_w = 14
-local sidebar = window.create(term.current(), 1, 2, side_w, h - 1)
-local chat_win = window.create(term.current(), side_w + 2, 2, w - side_w - 1, h - 3)
+local side_w = 12
+local chat_win = window.create(term.current(), side_w + 2, 2, w - side_w - 2, h - 3)
 
 local function decrypt(text, key)
     local res = ""
@@ -44,93 +34,101 @@ local function decrypt(text, key)
     return res
 end
 
-local function draw_interface()
-    -- Header
+local function draw_gui()
+    -- Шапка
     term.setBackgroundColor(colors.blue)
     term.clear()
-    term.setCursorPos(1,1)
+    term.setCursorPos(2,1)
     term.setTextColor(colors.white)
-    local title = " TG-CC 2026 | User: " .. username
-    term.write(title .. string.rep(" ", w - #title))
+    term.write("TG-CC | User: " .. username)
 
-    -- Sidebar
-    sidebar.setBackgroundColor(colors.lightGray)
-    sidebar.clear()
+    -- Сайдбар
+    term.setBackgroundColor(colors.lightGray)
+    for i=2, h do
+        term.setCursorPos(1, i)
+        term.write(string.rep(" ", side_w))
+    end
     for i, name in ipairs(contacts) do
-        sidebar.setCursorPos(1, i)
+        if i > h-2 then break end
+        term.setCursorPos(1, i+1)
         if name == target_user then
-            sidebar.setBackgroundColor(colors.gray)
-            sidebar.setTextColor(colors.white)
+            term.setBackgroundColor(colors.gray)
+            term.setTextColor(colors.white)
         else
-            sidebar.setBackgroundColor(colors.lightGray)
-            sidebar.setTextColor(colors.black)
+            term.setBackgroundColor(colors.lightGray)
+            term.setTextColor(colors.black)
         end
-        sidebar.write(" " .. name:sub(1, side_w - 1))
+        term.write(" " .. name:sub(1, side_w-1))
     end
 
-    -- Chat Area
+    -- Окно чата (Telegram Style)
     chat_win.setBackgroundColor(colors.black)
     chat_win.clear()
-    local y_off = 1
-    for i = math.max(1, #messages - (h-5)), #messages do
+    local win_w, win_h = chat_win.getSize()
+    local y_pos = win_h
+    
+    -- Отрисовка сообщений с конца (снизу вверх)
+    for i = #messages, 1, -1 do
+        if y_pos < 1 then break end
         local m = messages[i]
-        chat_win.setCursorPos(1, y_off)
-        chat_win.setTextColor(m.from == "Me" and colors.green or colors.cyan)
-        chat_win.write(m.from .. ": ")
+        local is_my = (m.from == "Me")
+        
+        -- Выравнивание
+        local x = is_my and (win_w - #m.text) or 1
+        local nick_x = is_my and (win_w - #m.from) or 1
+        
+        -- Текст сообщения
+        chat_win.setCursorPos(x, y_pos)
         chat_win.setTextColor(colors.white)
         chat_win.write(m.text)
-        y_off = y_off + 1
+        y_pos = y_pos - 1
+        
+        -- Никнейм над сообщением
+        chat_win.setCursorPos(nick_x, y_pos)
+        chat_win.setTextColor(is_my and colors.green or colors.cyan)
+        chat_win.write(m.from)
+        y_pos = y_pos - 2 -- Пробел между блоками
     end
 
-    -- Bottom Input
+    -- Поле ввода
     term.setBackgroundColor(colors.gray)
     term.setCursorPos(side_w + 1, h)
-    term.clearLine()
     term.setTextColor(colors.yellow)
-    term.write(target_user and (" To [" .. target_user .. "]: ") or " Select user ->")
-    term.setTextColor(colors.white)
-    term.write(input_buffer)
+    local prompt = target_user and ("To ["..target_user.."]: ") or "Select user ->"
+    term.write(prompt .. input_buffer)
 end
 
-local function ping_loop()
-    while true do
-        modem.transmit(SERVER_ID, PORT, {type = "ping", user = username})
-        sleep(3)
-    end
-end
-
-local function main_loop()
-    while true do
-        draw_interface()
-        local event, p1, p2, p3, p4 = os.pullEvent()
-
-        if event == "char" then
-            input_buffer = input_buffer .. p1
-        elseif event == "key" then
-            if p1 == keys.backspace then
-                input_buffer = input_buffer:sub(1, -2)
-            elseif p1 == keys.enter and target_user and #input_buffer > 0 then
-                modem.transmit(SERVER_ID, PORT, {
-                    type = "send", user = username, to = target_user, text = input_buffer
-                })
-                table.insert(messages, {from = "Me", text = input_buffer})
-                input_buffer = ""
-            end
-        elseif event == "mouse_click" then
-            if p2 <= side_w and contacts[p3 - 1] then
-                target_user = contacts[p3 - 1]
-                if target_user == username then target_user = nil end -- Нельзя писать самому себе
-            end
-        elseif event == "modem_message" then
-            local data = p4
-            if data.type == "status" then
-                contacts = data.users
-            elseif data.type == "msg" then
-                table.insert(messages, {from = data.from, text = decrypt(data.text, 7)})
-                if not target_user then target_user = data.from end
+-- Параллельные процессы
+parallel.waitForAll(
+    function() -- Пинг
+        while true do
+            modem.transmit(SERVER_ID, PORT, {type = "ping", user = username})
+            sleep(3)
+        end
+    end,
+    function() -- События
+        while true do
+            draw_gui()
+            local e, p1, p2, p3, p4 = os.pullEvent()
+            if e == "char" then
+                input_buffer = input_buffer .. p1
+            elseif e == "key" then
+                if p1 == keys.backspace then input_buffer = input_buffer:sub(1, -2)
+                elseif p1 == keys.enter and target_user and #input_buffer > 0 then
+                    modem.transmit(SERVER_ID, PORT, {type="send", user=username, to=target_user, text=input_buffer})
+                    table.insert(messages, {from="Me", text=input_buffer})
+                    input_buffer = ""
+                end
+            elseif e == "mouse_click" then
+                if p2 <= side_w and contacts[p3-1] then
+                    target_user = contacts[p3-1]
+                end
+            elseif e == "modem_message" then
+                if p4.type == "status" then contacts = p4.users
+                elseif p4.type == "msg" then
+                    table.insert(messages, {from=p4.from, text=decrypt(p4.text, 7)})
+                end
             end
         end
     end
-end
-
-parallel.waitForAll(ping_loop, main_loop)
+)
