@@ -26,9 +26,7 @@ local uiState = {
     messageScroll = 0,
     inputText = "",
     inputCursor = 1,
-    showHelp = false,
-    showError = false,
-    errorMessage = ""
+    showHelp = false
 }
 
 -- Colors
@@ -320,6 +318,12 @@ local function wrapText(text, width)
 end
 
 -- UI functions
+local function clearScreen()
+    term.setBackgroundColor(colors.black)
+    term.clear()
+    term.setCursorPos(1, 1)
+end
+
 local function drawSidebar()
     local width = math.floor(term.getSize() * 0.2)
     local height = term.getSize()
@@ -350,7 +354,11 @@ local function drawSidebar()
     if connectionError then
         term.setCursorPos(1, 4)
         term.setTextColor(colors.error)
-        term.write("Error: " .. connectionError:sub(1, width-8))
+        local errText = "Error: " .. connectionError
+        if #errText > width - 2 then
+            errText = errText:sub(1, width - 5) .. "..."
+        end
+        term.write(errText)
     end
     
     term.setCursorPos(1, 6)
@@ -359,11 +367,19 @@ local function drawSidebar()
     
     -- Contacts list
     local startY = 7
-    local i = 1
+    local i = 0
+    local contactList = {}
     
+    -- Convert contacts to list for ordered display
     for contactId, contact in pairs(contacts) do
-        if i > uiState.contactScroll and startY + i - uiState.contactScroll <= height then
+        table.insert(contactList, {id = contactId, data = contact})
+    end
+    
+    for _, contactEntry in ipairs(contactList) do
+        if i >= uiState.contactScroll and startY + i - uiState.contactScroll < height then
             local y = startY + i - uiState.contactScroll
+            local contactId = contactEntry.id
+            local contact = contactEntry.data
             
             term.setCursorPos(1, y)
             
@@ -397,41 +413,40 @@ local function drawSidebar()
             
             -- Name
             local displayName = contact.name or "Unknown"
-            if #displayName > width - 3 then
-                displayName = displayName:sub(1, width - 6) .. "..."
+            if #displayName > width - 4 then
+                displayName = displayName:sub(1, width - 7) .. "..."
             end
             
             term.write(displayName)
         end
         i = i + 1
     end
-    
-    term.setBackgroundColor(colors.background)
 end
 
 local function drawChatArea()
-    local sidebarWidth = math.floor(term.getSize() * 0.2)
-    local width = term.getSize() - sidebarWidth
-    local height = term.getSize() - 4 -- minus input area
+    local width, height = term.getSize()
+    local sidebarWidth = math.floor(width * 0.2)
+    local chatWidth = width - sidebarWidth
+    local chatHeight = height - 4
     
-    term.setBackgroundColor(colors.background)
-    
-    for y = 1, height do
+    -- Clear chat area
+    for y = 1, chatHeight do
         term.setCursorPos(sidebarWidth + 1, y)
+        term.setBackgroundColor(colors.background)
         term.clearLine()
     end
     
     if not connected then
-        term.setCursorPos(sidebarWidth + width/2 - 15, height/2 - 1)
+        term.setCursorPos(sidebarWidth + chatWidth/2 - 15, chatHeight/2 - 1)
         term.setTextColor(colors.warning)
         term.write("Not connected to server")
         
         if connectionError then
-            term.setCursorPos(sidebarWidth + width/2 - #connectionError/2, height/2 + 1)
+            term.setCursorPos(sidebarWidth + chatWidth/2 - #connectionError/2, chatHeight/2 + 1)
             term.setTextColor(colors.error)
             term.write(connectionError)
         else
-            term.setCursorPos(sidebarWidth + width/2 - 10, height/2 + 2)
+            term.setCursorPos(sidebarWidth + chatWidth/2 - 10, chatHeight/2 + 2)
             term.setTextColor(colors.text)
             term.write("Searching for server...")
         end
@@ -439,7 +454,7 @@ local function drawChatArea()
     end
     
     if not selectedContact then
-        term.setCursorPos(sidebarWidth + width/2 - 10, height/2)
+        term.setCursorPos(sidebarWidth + chatWidth/2 - 10, chatHeight/2)
         term.setTextColor(colors.text)
         term.write("Select contact to chat")
         return
@@ -454,11 +469,11 @@ local function drawChatArea()
     
     -- Message history
     local chatMessages = messages[selectedContact] or {}
-    local startMessage = math.max(1, #chatMessages - height + 3 - uiState.messageScroll)
+    local startMessage = math.max(1, #chatMessages - chatHeight + 3 - uiState.messageScroll)
     local y = 3
     
     for i = startMessage, #chatMessages do
-        if y > height then break end
+        if y > chatHeight then break end
         
         local msg = chatMessages[i]
         term.setCursorPos(sidebarWidth + 1, y)
@@ -474,7 +489,7 @@ local function drawChatArea()
         term.setTextColor(colors.text)
         
         -- Time
-        term.setCursorPos(sidebarWidth + width - 6, y)
+        term.setCursorPos(sidebarWidth + chatWidth - 6, y)
         term.setTextColor(colors.timestamp)
         term.write(formatTime(msg.timestamp))
         
@@ -482,9 +497,9 @@ local function drawChatArea()
         term.setCursorPos(sidebarWidth + 1, y + 1)
         term.setTextColor(colors.text)
         
-        local lines = wrapText(msg.text, width - 2)
+        local lines = wrapText(msg.text, chatWidth - 2)
         for j, line in ipairs(lines) do
-            if y + j > height then break end
+            if y + j > chatHeight then break end
             term.setCursorPos(sidebarWidth + 1, y + j)
             term.write(line)
         end
@@ -494,21 +509,21 @@ local function drawChatArea()
 end
 
 local function drawInputArea()
-    local sidebarWidth = math.floor(term.getSize() * 0.2)
-    local height = term.getSize()
+    local width, height = term.getSize()
+    local sidebarWidth = math.floor(width * 0.2)
     local inputHeight = 3
     
-    term.setBackgroundColor(colors.background)
-    
+    -- Clear input area
     for y = height - inputHeight + 1, height do
         term.setCursorPos(sidebarWidth + 1, y)
+        term.setBackgroundColor(colors.background)
         term.clearLine()
     end
     
     -- Separator
     term.setCursorPos(sidebarWidth + 1, height - inputHeight)
     term.setTextColor(colors.timestamp)
-    term.write(string.rep("-", term.getSize() - sidebarWidth))
+    term.write(string.rep("-", width - sidebarWidth))
     
     -- Input field
     local inputY = height - inputHeight + 2
@@ -529,7 +544,7 @@ local function drawInputArea()
     term.setTextColor(colors.text)
     term.write("> ")
     
-    local maxWidth = term.getSize() - sidebarWidth - 3
+    local maxWidth = width - sidebarWidth - 3
     local displayText = uiState.inputText
     
     if #displayText > maxWidth then
@@ -554,8 +569,7 @@ local function drawInputArea()
 end
 
 local function drawHelp()
-    term.setBackgroundColor(colors.background)
-    term.clear()
+    clearScreen()
     
     term.setCursorPos(1, 1)
     term.setTextColor(colors.highlight)
@@ -664,6 +678,8 @@ local function main()
     if not findModem() then
         print("Error: Wireless modem not found!")
         print("Place modem on any side of computer")
+        print("Press any key to exit...")
+        os.pullEvent("key")
         return
     end
     
@@ -672,14 +688,17 @@ local function main()
     
     print("Messenger client starting...")
     print("Client name: " .. clientName)
+    print("Press F1 for help, Ctrl+T to exit")
+    sleep(2) -- Give user time to read
     
     -- Initial UI draw
-    term.clear()
+    clearScreen()
     drawUI()
     
     -- Main event loop
     local lastPingTime = os.time()
     local lastReconnectAttempt = os.time()
+    local lastUIRefresh = os.time()
     
     while true do
         -- Handle reconnection if not connected
@@ -717,7 +736,13 @@ local function main()
             lastPingTime = os.time()
         end
         
-        -- Handle events
+        -- Auto-refresh UI every second
+        if os.time() - lastUIRefresh >= 1 then
+            drawUI()
+            lastUIRefresh = os.time()
+        end
+        
+        -- Handle events with timeout
         local event, p1, p2, p3 = os.pullEventRaw(0.1)
         
         if event == "rednet_message" then
@@ -740,7 +765,7 @@ local function main()
                     uiState.showHelp = false
                 else
                     -- If no contact selected, try to select first contact
-                    if not selectedContact and next(contacts) ~= nil then
+                    if not selectedContact then
                         for contactId, _ in pairs(contacts) do
                             selectedContact = contactId
                             unreadCount[contactId] = 0
@@ -819,7 +844,7 @@ local function main()
             end
         end
         
-        -- Redraw UI after every event or timeout
+        -- Always redraw UI after handling events
         drawUI()
     end
     
