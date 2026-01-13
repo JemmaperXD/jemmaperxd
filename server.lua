@@ -1,4 +1,4 @@
--- server.lua - Messenger V2 Server
+-- server.lua - Messenger V2 Server (FIXED)
 local protocol = "messenger_v2"
 local data_file = "server_data.dat"
 local args = {...}
@@ -12,7 +12,7 @@ local server_data = {
 
 -- Утилиты
 local function log(msg)
-    print(("[%s] %s"):format(os.date("%H:%M:%S"), msg))
+    print(("[%s] %s"):format(os.date("%H:%M:%S"), tostring(msg)))
 end
 
 local function save_data()
@@ -24,9 +24,13 @@ end
 local function load_data()
     if fs.exists(data_file) then
         local f = fs.open(data_file, "r")
-        server_data = textutils.unserialize(f.readAll())
+        local content = f.readAll()
         f.close()
-        log("Data loaded from file.")
+        if content and content ~= "" then
+            local data = textutils.unserialize(content)
+            if data then server_data = data end
+        end
+        log("Data loaded.")
     end
 end
 
@@ -69,52 +73,77 @@ local function handle_requests()
     while true do
         local id, msg = rednet.receive(protocol)
         if type(msg) == "table" then
+            
+            -- РЕГИСТРАЦИЯ
             if msg.type == "register" then
-                server_data.clients[id] = {name = msg.name, lastSeen = os.epoch("utc")}
+                local cName = msg.name or "Unknown"
+                server_data.clients[id] = {name = cName, lastSeen = os.epoch("utc")}
                 rednet.send(id, {type = "register_response", success = true, serverName = server_data.name}, protocol)
-                log("Registered client: " .. msg.name .. " (" .. id .. ")")
+                log("Registered: " .. cName .. " (" .. id .. ")")
                 save_data()
 
+            -- СПИСОК ОНЛАЙН
             elseif msg.type == "get_online" then
                 local list = {}
+                local now = os.epoch("utc")
                 for cid, cdata in pairs(server_data.clients) do
-                    if os.epoch("utc") - cdata.lastSeen < 60000 then -- 1 min timeout
+                    -- Удаляем тех, кого не видели больше 2 минут
+                    if now - cdata.lastSeen < 120000 then 
                         table.insert(list, {id = cid, name = cdata.name})
                     end
                 end
                 rednet.send(id, {type = "online_list", clients = list, serverName = server_data.name}, protocol)
 
+            -- ОТПРАВКА СООБЩЕНИЯ (ИСПРАВЛЕНО)
             elseif msg.type == "send_message" then
-                local packet = {
-                    sender = id,
-                    senderName = msg.senderName,
-                    target = msg.target,
-                    message = msg.message,
-                    time = os.epoch("utc")
-                }
-                table.insert(server_data.history, packet)
-                server_data.messages_queue[msg.target] = server_data.messages_queue[msg.target] or {}
-                table.insert(server_data.messages_queue[msg.target], packet)
-                rednet.send(id, {type = "message_response", success = true}, protocol)
-                log("Msg: " .. msg.senderName .. " -> " .. (msg.target or "all"))
+                -- Проверяем, что ID получателя существует и является числом
+                if msg.target and type(msg.target) == "number" then
+                    local packet = {
+                        sender = id,
+                        senderName = msg.senderName or "Anon",
+                        target = msg.target,
+                        message = msg.message or "",
+                        time = os.epoch("utc")
+                    }
+                    
+                    table.insert(server_data.history, packet)
+                    
+                    -- Инициализируем очередь, если её нет
+                    server_data.messages_queue[msg.target] = server_data.messages_queue[msg.target] or {}
+                    table.insert(server_data.messages_queue[msg.target], packet)
+                    
+                    rednet.send(id, {type = "message_response", success = true}, protocol)
+                    log("Msg: " .. tostring(msg.senderName) .. " -> " .. tostring(msg.target))
+                    save_data() -- Сохраняем при каждом сообщении для надежности
+                else
+                    rednet.send(id, {type = "message_response", success = false, error = "No target specified"}, protocol)
+                    log("Error: Msg from " .. id .. " has no target")
+                end
 
+            -- ПОЛУЧЕНИЕ СООБЩЕНИЙ
             elseif msg.type == "get_messages" then
                 local queue = server_data.messages_queue[id] or {}
-                rednet.send(id, {type = "messages", messages = queue}, protocol)
-                server_data.messages_queue[id] = {}
+                if #queue > 0 then
+                    rednet.send(id, {type = "messages", messages = queue}, protocol)
+                    server_data.messages_queue[id] = {} -- Очищаем очередь после отправки
+                    save_data()
+                end
 
+            -- PING
             elseif msg.type == "ping" then
-                if server_data.clients[id] then server_data.clients[id].lastSeen = os.epoch("utc") end
+                if server_data.clients[id] then 
+                    server_data.clients[id].lastSeen = os.epoch("utc") 
+                end
                 rednet.send(id, {type = "pong", time = os.epoch("utc")}, protocol)
             end
         end
     end
 end
 
--- Автосохранение
+-- Автосохранение (каждые 60 сек)
 local function auto_save()
     while true do
-        os.sleep(30)
+        os.sleep(60)
         save_data()
     end
 end
