@@ -1,48 +1,79 @@
--- Messenger Server for CC:Tweaked
-local VERSION = "1.0"
+-- ============================================
+-- Мессенджер для ComputerCraft: Tweaked
+-- Серверная часть
+-- ============================================
+
+-- Настройки
 local PROTOCOL = "messenger_v2"
+local DATA_FILE = "server_data.dat"
+local SAVE_INTERVAL = 300 -- секунд между автосохранениями
+local INACTIVE_TIMEOUT = 300 -- секунд до пометки клиента как неактивного
 
--- Parse command line arguments
-local args = {...}
-local serverName = nil
+-- Глобальные переменные
+local serverName = "Сервер"
 local modemSide = nil
+local clients = {} -- {[id] = {name, lastActivity, online}}
+local messages = {} -- {[targetId] = {сообщения}}
+local messageQueue = {} -- {[targetId] = {непрочитанные сообщения}}
+local running = true
+local lastSaveTime = os.clock()
 
-for i = 1, #args do
-    local arg = args[i]
-    if arg == "-n" or arg == "--name" then
-        serverName = args[i + 1]
-    elseif arg == "-s" or arg == "--side" then
-        modemSide = args[i + 1]
-    elseif arg == "-h" or arg == "--help" then
-        print("Messenger Server v" .. VERSION)
-        print("Usage: server [options]")
-        print()
-        print("Options:")
-        print("  -n, --name <name>    Set server display name")
-        print("  -s, --side <side>    Specify modem side")
-        print("  -h, --help           Show help")
-        return
+-- Вспомогательные функции
+local function log(message)
+    local time = os.time()
+    local formattedTime = textutils.formatTime(time, false)
+    print("[" .. formattedTime .. "] " .. message)
+end
+
+local function saveData()
+    local data = {
+        serverName = serverName,
+        clients = clients,
+        messages = messages,
+        messageQueue = messageQueue
+    }
+    
+    local file = fs.open(DATA_FILE, "w")
+    if file then
+        file.write(textutils.serialize(data))
+        file.close()
+        log("Данные сохранены")
+        return true
+    else
+        log("Ошибка сохранения данных")
+        return false
     end
 end
 
-print("=== Messenger Server v" .. VERSION .. " ===")
-print("Loading...")
-
--- Find modem
-function findModem(side)
-    if side then
-        local modem = peripheral.wrap(side)
-        if modem and modem.isWireless and modem.isWireless() then
-            return side
+local function loadData()
+    if fs.exists(DATA_FILE) then
+        local file = fs.open(DATA_FILE, "r")
+        if file then
+            local content = file.readAll()
+            file.close()
+            
+            local data = textutils.unserialize(content)
+            if data then
+                serverName = data.serverName or serverName
+                clients = data.clients or {}
+                messages = data.messages or {}
+                messageQueue = data.messageQueue or {}
+                log("Данные загружены")
+                return true
+            end
         end
     end
+    return false
+end
+
+local function findModem()
+    -- Поиск модема на всех сторонах
+    local sides = {"top", "bottom", "left", "right", "front", "back"}
     
-    local sides = peripheral.getNames()
-    for _, s in ipairs(sides) do
-        if peripheral.getType(s) == "modem" then
-            local modem = peripheral.wrap(s)
-            if modem and modem.isWireless and modem.isWireless() then
-                return s
+    for _, side in ipairs(sides) do
+        if peripheral.getType(side) == "modem" then
+            if peripheral.wrap(side).isWireless() then
+                return side
             end
         end
     end
@@ -50,131 +81,320 @@ function findModem(side)
     return nil
 end
 
-local MODEM_SIDE = findModem(modemSide)
-if not MODEM_SIDE then
-    print("No modem found!")
-    return
-end
-
-rednet.open(MODEM_SIDE)
-print("Modem opened: " .. MODEM_SIDE)
-
--- Server setup
-local SERVER_NAME = serverName or os.getComputerLabel() or "Server" .. os.getComputerID()
-rednet.host(PROTOCOL, SERVER_NAME)
-
-print("Server: " .. SERVER_NAME)
-print("ID: " .. os.getComputerID())
-print("Protocol: " .. PROTOCOL)
-
--- Data storage
-local clients = {}
-local messages = {}
-
--- Functions
-function saveData()
-    local data = {clients = clients, messages = messages}
-    local file = fs.open("server_data.dat", "w")
-    if file then
-        file.write(textutils.serialize(data))
-        file.close()
-    end
-end
-
-function loadData()
-    if fs.exists("server_data.dat") then
-        local file = fs.open("server_data.dat", "r")
-        if file then
-            local data = textutils.unserialize(file.readAll())
-            file.close()
-            if data then
-                clients = data.clients or clients
-                messages = data.messages or messages
-            end
+local function cleanupInactiveClients()
+    local currentTime = os.time()
+    local removed = false
+    
+    for id, client in pairs(clients) do
+        if currentTime - client.lastActivity > INACTIVE_TIMEOUT then
+            client.online = false
+            removed = true
+            log("Клиент " .. client.name .. " помечен как оффлайн")
         end
-    end
-end
-
-function processRequest(senderId, request)
-    if request.type == "register" then
-        clients[senderId] = {
-            name = request.name,
-            lastSeen = os.epoch("utc")
-        }
-        if not messages[senderId] then
-            messages[senderId] = {}
-        end
-        return {type = "register_response", success = true, serverName = SERVER_NAME}
-        
-    elseif request.type == "send_message" then
-        local targetId = request.target
-        if clients[targetId] then
-            local msg = {
-                sender = senderId,
-                senderName = request.senderName,
-                message = request.message,
-                time = os.epoch("utc")
-            }
-            table.insert(messages[targetId], msg)
-            return {type = "message_response", success = true}
-        else
-            return {type = "message_response", success = false, error = "Client not found"}
-        end
-        
-    elseif request.type == "get_online" then
-        local online = {}
-        for id, client in pairs(clients) do
-            if os.epoch("utc") - client.lastSeen < 30000 then
-                table.insert(online, {id = id, name = client.name})
-            end
-        end
-        return {type = "online_list", clients = online, serverName = SERVER_NAME}
-        
-    elseif request.type == "get_messages" then
-        local userMsgs = messages[senderId] or {}
-        return {type = "messages", messages = userMsgs}
-        
-    elseif request.type == "ping" then
-        if clients[senderId] then
-            clients[senderId].lastSeen = os.epoch("utc")
-        end
-        return {type = "pong"}
     end
     
-    return {type = "error", message = "Unknown request"}
+    return removed
 end
 
--- Main loop
-function main()
+local function handleRegister(senderId, request)
+    local clientName = request.name
+    
+    if not clientName or clientName == "" then
+        return {
+            type = "register_response",
+            success = false,
+            error = "Не указано имя"
+        }
+    end
+    
+    -- Проверяем, не занято ли имя другим клиентом
+    for id, client in pairs(clients) do
+        if client.name == clientName and id ~= senderId then
+            return {
+                type = "register_response",
+                success = false,
+                error = "Имя уже занято"
+            }
+        end
+    end
+    
+    -- Регистрируем или обновляем клиента
+    if not clients[senderId] then
+        clients[senderId] = {
+            name = clientName,
+            lastActivity = os.time(),
+            online = true
+        }
+        log("Новый клиент: " .. clientName .. " (ID: " .. senderId .. ")")
+    else
+        clients[senderId].name = clientName
+        clients[senderId].lastActivity = os.time()
+        clients[senderId].online = true
+        log("Клиент обновлен: " .. clientName)
+    end
+    
+    return {
+        type = "register_response",
+        success = true,
+        serverName = serverName
+    }
+end
+
+local function handleSendMessage(senderId, request)
+    local targetId = request.target
+    local messageText = request.message
+    local senderName = request.senderName or clients[senderId] and clients[senderId].name or "Неизвестно"
+    
+    if not targetId or not messageText then
+        return {
+            type = "message_response",
+            success = false,
+            error = "Не указан получатель или сообщение"
+        }
+    end
+    
+    -- Проверяем существование получателя
+    if not clients[targetId] then
+        return {
+            type = "message_response",
+            success = false,
+            error = "Получатель не найден"
+        }
+    end
+    
+    local timestamp = os.epoch("utc")
+    local message = {
+        sender = senderId,
+        senderName = senderName,
+        target = targetId,
+        message = messageText,
+        time = timestamp
+    }
+    
+    -- Сохраняем в историю
+    if not messages[targetId] then
+        messages[targetId] = {}
+    end
+    table.insert(messages[targetId], message)
+    
+    -- Также сохраняем в историю отправителя
+    if not messages[senderId] then
+        messages[senderId] = {}
+    end
+    table.insert(messages[senderId], message)
+    
+    -- Добавляем в очередь непрочитанных
+    if not messageQueue[targetId] then
+        messageQueue[targetId] = {}
+    end
+    table.insert(messageQueue[targetId], message)
+    
+    log("Сообщение от " .. senderName .. " для " .. clients[targetId].name)
+    
+    return {
+        type = "message_response",
+        success = true
+    }
+end
+
+local function handleGetOnline(senderId)
+    local onlineList = {}
+    
+    for id, client in pairs(clients) do
+        if client.online and id ~= senderId then
+            table.insert(onlineList, {
+                id = id,
+                name = client.name
+            })
+        end
+    end
+    
+    return {
+        type = "online_list",
+        clients = onlineList,
+        serverName = serverName
+    }
+end
+
+local function handleGetMessages(senderId)
+    local userMessages = messageQueue[senderId] or {}
+    
+    -- Очищаем очередь после отправки
+    messageQueue[senderId] = {}
+    
+    -- Обновляем время активности
+    if clients[senderId] then
+        clients[senderId].lastActivity = os.time()
+    end
+    
+    return {
+        type = "messages",
+        messages = userMessages
+    }
+end
+
+local function handlePing()
+    return {
+        type = "pong",
+        time = os.epoch("utc")
+    }
+end
+
+local function processRequest(senderId, message, protocol)
+    if protocol ~= PROTOCOL then
+        return nil
+    end
+    
+    local request = textutils.unserialize(message)
+    if not request or type(request) ~= "table" then
+        return nil
+    end
+    
+    local response = nil
+    
+    if request.type == "register" then
+        response = handleRegister(senderId, request)
+    elseif request.type == "send_message" then
+        response = handleSendMessage(senderId, request)
+    elseif request.type == "get_online" then
+        response = handleGetOnline(senderId)
+    elseif request.type == "get_messages" then
+        response = handleGetMessages(senderId)
+    elseif request.type == "ping" then
+        response = handlePing()
+    end
+    
+    if response then
+        return textutils.serialize(response)
+    end
+    
+    return nil
+end
+
+local function printHelp()
+    print("Использование: server [опции]")
+    print("Опции:")
+    print("  -n, --name <имя>   Имя сервера")
+    print("  -s, --side <сторона> Сторона модема")
+    print("  -h, --help        Показать эту справку")
+    print()
+    print("Примеры:")
+    print("  server --name \"Главный чат\" --side right")
+    print("  server -n \"Чатовичок\" -s top")
+end
+
+local function parseArguments(args)
+    local i = 1
+    while i <= #args do
+        local arg = args[i]
+        
+        if arg == "-n" or arg == "--name" then
+            i = i + 1
+            if args[i] then
+                serverName = args[i]
+            end
+        elseif arg == "-s" or arg == "--side" then
+            i = i + 1
+            if args[i] then
+                modemSide = args[i]
+            end
+        elseif arg == "-h" or arg == "--help" then
+            printHelp()
+            return false
+        end
+        
+        i = i + 1
+    end
+    
+    return true
+end
+
+-- Основная функция
+local function main()
+    -- Обработка аргументов командной строки
+    local args = {...}
+    if not parseArguments(args) then
+        return
+    end
+    
+    -- Поиск модема
+    if not modemSide then
+        modemSide = findModem()
+    end
+    
+    if not modemSide then
+        print("Не найден беспроводной модем!")
+        print("Доступные стороны: top, bottom, left, right, front, back")
+        print("Укажите сторону через --side <сторона>")
+        return
+    end
+    
+    -- Инициализация модема
+    rednet.open(modemSide)
+    
+    -- Загрузка данных
     loadData()
     
-    print("\n=== Server Started ===")
-    print("Waiting for connections...")
-    print("Ctrl+T to stop\n")
+    -- Регистрация сервера
+    rednet.host(PROTOCOL, serverName)
     
-    while true do
-        local id, msg, protocol = rednet.receive(PROTOCOL, 1)
+    -- Вывод информации
+    term.clear()
+    term.setCursorPos(1, 1)
+    print("=== Сервер мессенджера ===")
+    print("Имя сервера: " .. serverName)
+    print("ID сервера: " .. os.getComputerID())
+    print("Модем: " .. modemSide)
+    print("Протокол: " .. PROTOCOL)
+    print("Клиентов: " .. #clients)
+    print("---------------------------")
+    print("Сервер запущен. Ожидание подключений...")
+    print("Ctrl+T для завершения")
+    print()
+    
+    -- Главный цикл
+    while running do
+        local currentTime = os.clock()
         
-        if id then
-            if protocol == PROTOCOL then
-                local response = processRequest(id, msg)
-                rednet.send(id, response, PROTOCOL)
+        -- Автосохранение
+        if currentTime - lastSaveTime > SAVE_INTERVAL then
+            if saveData() then
+                lastSaveTime = currentTime
             end
         end
         
+        -- Очистка неактивных клиентов
+        cleanupInactiveClients()
+        
+        -- Обработка входящих сообщений с таймаутом
+        local event, senderId, message, protocol = os.pullEvent("rednet_message")
+        
+        if event == "rednet_message" then
+            local response = processRequest(senderId, message, protocol)
+            if response then
+                rednet.send(senderId, response, PROTOCOL)
+            end
+        end
+        
+        -- Проверка события завершения
         local event = os.pullEventRaw()
         if event == "terminate" then
+            running = false
             break
         end
     end
+    
+    -- Корректное завершение
+    log("Завершение работы сервера...")
+    saveData()
+    rednet.unhost(PROTOCOL)
+    rednet.close(modemSide)
+    print("Сервер остановлен.")
 end
 
+-- Обработка ошибок
 local ok, err = pcall(main)
 if not ok then
-    print("Error: " .. err)
+    print("Ошибка в сервере: " .. err)
+    print("Подробности: " .. debug.traceback())
 end
-
-saveData()
-rednet.unhost(PROTOCOL)
-rednet.close()
-print("Server stopped")
