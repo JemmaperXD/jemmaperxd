@@ -1,14 +1,13 @@
--- Messenger Client with GUI
+-- Messenger Client for CC:Tweaked
 local VERSION = "1.0"
 local PROTOCOL = "messenger_v2"
+local SERVER_ID = 114
 local PING_INTERVAL = 10
-local SERVER_ID = 114 -- ID сервера (ваш сервер имеет ID 114)
 
--- Parse command line arguments
+-- Parse arguments
 local args = {...}
 local clientName = nil
 local modemSide = nil
-local showHelp = false
 
 for i = 1, #args do
     local arg = args[i]
@@ -17,250 +16,144 @@ for i = 1, #args do
     elseif arg == "-m" or arg == "--modem" then
         modemSide = args[i + 1]
     elseif arg == "-h" or arg == "--help" then
-        showHelp = true
+        print("Messenger Client v" .. VERSION)
+        print("Usage: client [options]")
+        print("Options:")
+        print("  -n, --name <name>    Client display name")
+        print("  -m, --modem <side>   Modem side")
+        print("  -h, --help           Show help")
+        return
     end
 end
 
-if showHelp then
-    print("Messenger Client v" .. VERSION)
-    print("Usage: client [options]")
-    print()
-    print("Options:")
-    print("  -n, --name <name>     Client display name")
-    print("  -m, --modem <side>    Modem side (left/right/top/bottom/back/front)")
-    print("  -h, --help            Show this help message")
-    print()
-    print("Server ID: " .. SERVER_ID)
-    print("Protocol: " .. PROTOCOL)
-    return
-end
-
 print("=== Messenger Client v" .. VERSION .. " ===")
-print("Connecting to server ID: " .. SERVER_ID)
+print("Server ID: " .. SERVER_ID)
 
--- Function to find wireless modem
-function findWirelessModem(specifiedSide)
-    print("Looking for modem...")
-    
-    if specifiedSide then
-        local modem = peripheral.wrap(specifiedSide)
+-- Find modem
+function findModem(side)
+    if side then
+        local modem = peripheral.wrap(side)
         if modem and modem.isWireless and modem.isWireless() then
-            print("Found modem on side: " .. specifiedSide)
-            return specifiedSide
-        else
-            print("No modem found on: " .. specifiedSide)
+            return side
         end
     end
     
     local sides = peripheral.getNames()
-    
-    for _, side in ipairs(sides) do
-        local type = peripheral.getType(side)
-        if type == "modem" then
-            local modem = peripheral.wrap(side)
+    for _, s in ipairs(sides) do
+        if peripheral.getType(s) == "modem" then
+            local modem = peripheral.wrap(s)
             if modem and modem.isWireless and modem.isWireless() then
-                print("Found modem on side: " .. side)
-                return side
+                return s
             end
-        end
-    end
-    
-    print("No modem found!")
-    print("Available sides:")
-    for _, side in ipairs(sides) do
-        print("  " .. side .. " - " .. peripheral.getType(side))
-    end
-    
-    print("\nEnter modem side:")
-    local input = read()
-    
-    if input then
-        local modem = peripheral.wrap(input)
-        if modem and modem.isWireless and modem.isWireless() then
-            print("Using modem on side: " .. input)
-            return input
-        else
-            print("No modem on side: " .. input)
         end
     end
     
     return nil
 end
 
--- Find modem
-local MODEM_SIDE = findWirelessModem(modemSide)
+local MODEM_SIDE = findModem(modemSide)
 if not MODEM_SIDE then
-    print("ERROR: No wireless modem found!")
-    print("Attach a wireless modem and try again")
+    print("No modem found!")
     return
 end
 
 rednet.open(MODEM_SIDE)
-print("Modem opened on side: " .. MODEM_SIDE)
+print("Modem opened: " .. MODEM_SIDE)
 
--- Application state
+-- Client state
 local state = {
     username = clientName or os.getComputerLabel() or "User" .. os.getComputerID(),
     messages = {},
     contacts = {},
     currentContact = nil,
     connected = false,
-    lastPing = 0,
-    serverId = SERVER_ID,
     serverName = "Unknown"
 }
 
-print("Client name: " .. state.username)
+print("Client: " .. state.username)
 
 -- Network functions
 function sendRequest(request, timeout)
     rednet.send(SERVER_ID, request, PROTOCOL)
-    
-    local senderId, response, protocol = rednet.receive(PROTOCOL, timeout or 3)
-    
-    if senderId == SERVER_ID and protocol == PROTOCOL then
+    local id, response = rednet.receive(PROTOCOL, timeout or 3)
+    if id == SERVER_ID then
         return response
     end
-    
     return nil
 end
 
 function connectToServer()
-    print("Connecting to server...")
-    
-    -- Test if server is reachable
-    rednet.send(SERVER_ID, {type = "ping"}, PROTOCOL)
-    local id, response = rednet.receive(PROTOCOL, 2)
-    
-    if id == SERVER_ID and response and response.type == "pong" then
-        print("Server is reachable")
-        
-        -- Register with server
-        local response = sendRequest({
-            type = "register",
-            name = state.username
-        }, 5)
-        
-        if response and response.success then
-            state.connected = true
-            state.serverName = response.serverName or "Unknown"
-            print("Connected to server: " .. state.serverName)
-            return true
-        else
-            print("Failed to register with server")
-            return false
-        end
-    else
-        print("Server not responding")
-        return false
-    end
-end
-
-function sendMessage(targetId, message)
+    print("Connecting...")
     local response = sendRequest({
-        type = "send_message",
-        target = targetId,
-        message = message,
-        senderName = state.username
-    })
+        type = "register",
+        name = state.username
+    }, 5)
     
     if response and response.success then
-        return true
-    else
-        print("Failed to send message: " .. (response and response.error or "timeout"))
-        return false
-    end
-end
-
-function updateContacts()
-    local response = sendRequest({
-        type = "get_online"
-    })
-    
-    if response and response.clients then
-        state.contacts = response.clients
-        state.serverName = response.serverName or state.serverName
-        
-        -- Keep current contact selected if possible
-        if state.currentContact then
-            local found = false
-            for _, contact in ipairs(state.contacts) do
-                if contact.id == state.currentContact then
-                    found = true
-                    break
-                end
-            end
-            if not found then
-                state.currentContact = nil
-            end
-        end
-        
+        state.connected = true
+        state.serverName = response.serverName or "Server"
+        print("Connected to " .. state.serverName)
         return true
     end
-    
     return false
 end
 
-function getNewMessages()
-    local response = sendRequest({
-        type = "get_messages"
-    })
-    
+function updateContacts()
+    local response = sendRequest({type = "get_online"})
+    if response and response.clients then
+        state.contacts = response.clients
+        state.serverName = response.serverName or state.serverName
+        return true
+    end
+    return false
+end
+
+function getMessages()
+    local response = sendRequest({type = "get_messages"})
     if response and response.messages then
         for _, msg in ipairs(response.messages) do
             table.insert(state.messages, msg)
         end
-        
-        -- Sound notification
-        local speaker = peripheral.find("speaker")
-        if speaker then
-            speaker.playSound("block.note_block.pling", 0.5)
-        end
-        
         return true
     end
-    
     return false
 end
 
-function sendPing()
-    sendRequest({
-        type = "ping"
+function sendMessage(target, text)
+    local response = sendRequest({
+        type = "send_message",
+        target = target,
+        message = text,
+        senderName = state.username
     })
-    state.lastPing = os.clock()
+    return response and response.success or false
 end
 
--- GUI constants
-local WIDTH, HEIGHT = term.getSize()
-local INPUT_HEIGHT = 3
-local CONTACTS_WIDTH = 20
-local MESSAGES_X = CONTACTS_WIDTH + 2
+-- GUI setup
+local W, H = term.getSize()
+local CONTACTS_W = 20
+local INPUT_H = 3
+local MSG_X = CONTACTS_W + 2
 
--- GUI elements
 local gui = {
     inputText = "",
-    selectedContact = 1,
-    scrollOffset = 0,
-    inputScroll = 0
+    selected = 1,
+    scroll = 0
 }
 
--- GUI functions
 function drawBorder()
     term.setBackgroundColor(colors.blue)
     term.setTextColor(colors.white)
     
     term.setCursorPos(1, 1)
-    term.write(string.rep(" ", WIDTH))
-    
+    term.write(string.rep(" ", W))
     term.setCursorPos(2, 1)
-    term.write("M: " .. state.username)
+    term.write("Messenger - " .. state.username)
     
-    if state.connected then
-        term.setCursorPos(WIDTH - 30, 1)
-        term.write("S: " .. state.serverName .. " (ID:" .. SERVER_ID .. ")")
-    end
+    term.setCursorPos(W - 15, 1)
+    term.write(state.serverName)
     
-    term.setCursorPos(WIDTH - 8, 1)
+    term.setCursorPos(W - 8, 1)
     if state.connected then
         term.setBackgroundColor(colors.green)
         term.write(" ONLINE ")
@@ -270,14 +163,13 @@ function drawBorder()
     end
     
     term.setBackgroundColor(colors.blue)
-    
-    for y = 2, HEIGHT - INPUT_HEIGHT do
-        term.setCursorPos(CONTACTS_WIDTH + 1, y)
+    for y = 2, H - INPUT_H do
+        term.setCursorPos(CONTACTS_W + 1, y)
         term.write("│")
     end
     
-    term.setCursorPos(1, HEIGHT - INPUT_HEIGHT + 1)
-    term.write(string.rep("─", WIDTH))
+    term.setCursorPos(1, H - INPUT_H + 1)
+    term.write(string.rep("─", W))
     
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.white)
@@ -285,25 +177,19 @@ end
 
 function drawContacts()
     term.setBackgroundColor(colors.gray)
-    term.setTextColor(colors.white)
-    
-    for i = 1, HEIGHT - INPUT_HEIGHT - 1 do
-        term.setCursorPos(1, i + 1)
-        term.write(string.rep(" ", CONTACTS_WIDTH))
+    for y = 2, H - INPUT_H do
+        term.setCursorPos(1, y)
+        term.write(string.rep(" ", CONTACTS_W))
     end
     
     term.setCursorPos(2, 2)
-    if state.connected then
-        term.write("Contacts [" .. #state.contacts .. "]:")
-    else
-        term.write("Not connected")
-    end
+    term.write("Contacts:")
     
-    local startIdx = gui.scrollOffset
-    local maxVisible = HEIGHT - INPUT_HEIGHT - 2
+    local maxVisible = H - INPUT_H - 2
+    local start = gui.scroll
     
     for i = 1, math.min(#state.contacts, maxVisible) do
-        local idx = i + startIdx
+        local idx = i + start
         if idx <= #state.contacts then
             local contact = state.contacts[idx]
             local y = i + 2
@@ -317,13 +203,11 @@ function drawContacts()
             end
             
             term.setCursorPos(2, y)
-            
-            local displayName = contact.name
-            if #displayName > CONTACTS_WIDTH - 5 then
-                displayName = string.sub(displayName, 1, CONTACTS_WIDTH - 5) .. "..."
+            local name = contact.name
+            if #name > CONTACTS_W - 3 then
+                name = string.sub(name, 1, CONTACTS_W - 3) .. "..."
             end
-            
-            term.write(displayName)
+            term.write(name)
         end
     end
     
@@ -332,22 +216,13 @@ function drawContacts()
 end
 
 function drawMessages()
-    term.setBackgroundColor(colors.black)
-    term.setTextColor(colors.white)
-    
-    for y = 2, HEIGHT - INPUT_HEIGHT do
-        term.setCursorPos(MESSAGES_X, y)
-        term.write(string.rep(" ", WIDTH - MESSAGES_X))
-    end
-    
-    if not state.connected then
-        term.setCursorPos(MESSAGES_X + 5, math.floor(HEIGHT / 2))
-        term.write("Not connected to server")
-        return
+    for y = 2, H - INPUT_H do
+        term.setCursorPos(MSG_X, y)
+        term.write(string.rep(" ", W - MSG_X))
     end
     
     if not state.currentContact then
-        term.setCursorPos(MESSAGES_X + 5, math.floor(HEIGHT / 2))
+        term.setCursorPos(MSG_X + 5, H / 2)
         term.write("Select a contact")
         return
     end
@@ -360,32 +235,35 @@ function drawMessages()
         end
     end
     
-    local contactMessages = {}
+    -- Get messages for this contact
+    local chatMsgs = {}
     for _, msg in ipairs(state.messages) do
         if msg.sender == state.currentContact or 
            (msg.target == state.currentContact and msg.sender == os.getComputerID()) then
-            table.insert(contactMessages, msg)
+            table.insert(chatMsgs, msg)
         end
     end
     
-    if #contactMessages == 0 then
-        term.setCursorPos(MESSAGES_X + 5, math.floor(HEIGHT / 2))
+    if #chatMsgs == 0 then
+        term.setCursorPos(MSG_X + 5, H / 2)
         term.write("No messages with " .. contactName)
         return
     end
     
-    local displayY = HEIGHT - INPUT_HEIGHT - 1
-    local msgIndex = #contactMessages
-    
-    while msgIndex > 0 and displayY >= 2 do
-        local msg = contactMessages[msgIndex]
+    -- Display messages
+    local y = H - INPUT_H - 1
+    for i = #chatMsgs, 1, -1 do
+        if y < 2 then break end
+        local msg = chatMsgs[i]
         local isOwn = msg.sender == os.getComputerID()
         
+        -- Time
         local timeStr = os.date("%H:%M", msg.time / 1000)
-        term.setCursorPos(WIDTH - 7, displayY)
+        term.setCursorPos(W - 6, y)
         term.write(timeStr)
         
-        term.setCursorPos(MESSAGES_X, displayY)
+        -- Sender
+        term.setCursorPos(MSG_X, y)
         if isOwn then
             term.setTextColor(colors.green)
             term.write("You: ")
@@ -394,56 +272,47 @@ function drawMessages()
             term.write(contactName .. ": ")
         end
         
+        -- Message
         term.setTextColor(colors.white)
-        local message = msg.message
-        local maxWidth = WIDTH - MESSAGES_X - 2
+        term.setCursorPos(MSG_X, y + 1)
         
-        displayY = displayY - 1
+        local text = msg.message
+        local maxWidth = W - MSG_X - 2
         
-        while #message > 0 do
-            if #message <= maxWidth then
-                term.setCursorPos(MESSAGES_X, displayY)
-                term.write(message)
+        while #text > 0 do
+            if #text <= maxWidth then
+                term.write(text)
                 break
             else
                 local breakPos = maxWidth
-                while breakPos > 0 and message:sub(breakPos, breakPos) ~= " " do
+                while breakPos > 0 and text:sub(breakPos, breakPos) ~= " " do
                     breakPos = breakPos - 1
                 end
                 if breakPos == 0 then breakPos = maxWidth end
                 
-                term.setCursorPos(MESSAGES_X, displayY)
-                term.write(message:sub(1, breakPos))
-                message = message:sub(breakPos + 1)
-                displayY = displayY - 1
+                term.write(text:sub(1, breakPos))
+                text = text:sub(breakPos + 1)
+                y = y - 1
+                if y < 2 then break end
+                term.setCursorPos(MSG_X, y + 1)
             end
         end
         
-        displayY = displayY - 1
-        msgIndex = msgIndex - 1
+        y = y - 2
     end
     
     term.setTextColor(colors.white)
 end
 
 function drawInput()
-    term.setBackgroundColor(colors.black)
-    term.setTextColor(colors.white)
-    
-    for y = HEIGHT - INPUT_HEIGHT + 2, HEIGHT do
+    for y = H - INPUT_H + 2, H do
         term.setCursorPos(1, y)
-        term.write(string.rep(" ", WIDTH))
-    end
-    
-    if not state.connected then
-        term.setCursorPos(1, HEIGHT - 1)
-        term.write("Connecting to server...")
-        return
+        term.write(string.rep(" ", W))
     end
     
     if not state.currentContact then
-        term.setCursorPos(1, HEIGHT - 1)
-        term.write("Select a contact to message")
+        term.setCursorPos(1, H - 1)
+        term.write("Select contact to message")
         return
     end
     
@@ -455,27 +324,14 @@ function drawInput()
         end
     end
     
-    term.setCursorPos(1, HEIGHT - INPUT_HEIGHT + 2)
+    term.setCursorPos(1, H - INPUT_H + 2)
     term.write("To " .. contactName .. ":")
     
-    term.setCursorPos(1, HEIGHT - 1)
-    term.write("> ")
+    term.setCursorPos(1, H - 1)
+    term.write("> " .. gui.inputText)
     
-    local displayText = gui.inputText
-    if #displayText > WIDTH - 3 then
-        if gui.inputScroll > 0 then
-            displayText = string.sub(displayText, gui.inputScroll + 1)
-        end
-        displayText = string.sub(displayText, 1, WIDTH - 3)
-    end
-    
-    term.write(displayText)
-    
-    local cursorPos = #gui.inputText - gui.inputScroll + 3
-    if cursorPos <= WIDTH then
-        term.setCursorPos(cursorPos, HEIGHT - 1)
-        term.setCursorBlink(true)
-    end
+    term.setCursorBlink(true)
+    term.setCursorPos(#gui.inputText + 3, H - 1)
 end
 
 function drawUI()
@@ -490,81 +346,52 @@ end
 
 function handleInput()
     while true do
-        local event, key, x, y = os.pullEvent()
+        drawUI()
+        
+        local event = os.pullEvent()
         
         if event == "key" then
-            if key == keys.up then
-                if #state.contacts > 0 then
-                    gui.selectedContact = math.max(1, gui.selectedContact - 1)
-                    if gui.selectedContact <= gui.scrollOffset then
-                        gui.scrollOffset = math.max(0, gui.scrollOffset - 1)
-                    end
-                    state.currentContact = state.contacts[gui.selectedContact].id
-                    drawUI()
+            local key = os.pullEvent("key")
+            if key == keys.up and gui.selected > 1 then
+                gui.selected = gui.selected - 1
+                if gui.selected <= gui.scroll then
+                    gui.scroll = gui.scroll - 1
                 end
-            elseif key == keys.down then
-                if #state.contacts > 0 then
-                    gui.selectedContact = math.min(#state.contacts, gui.selectedContact + 1)
-                    local maxVisible = HEIGHT - INPUT_HEIGHT - 2
-                    if gui.selectedContact > gui.scrollOffset + maxVisible then
-                        gui.scrollOffset = math.min(#state.contacts - maxVisible, gui.scrollOffset + 1)
-                    end
-                    state.currentContact = state.contacts[gui.selectedContact].id
-                    drawUI()
+                state.currentContact = state.contacts[gui.selected].id
+            elseif key == keys.down and gui.selected < #state.contacts then
+                gui.selected = gui.selected + 1
+                local maxVisible = H - INPUT_H - 2
+                if gui.selected > gui.scroll + maxVisible then
+                    gui.scroll = gui.scroll + 1
                 end
+                state.currentContact = state.contacts[gui.selected].id
             elseif key == keys.enter then
-                if state.currentContact then
-                    if gui.inputText ~= "" then
-                        if sendMessage(state.currentContact, gui.inputText) then
-                            table.insert(state.messages, {
-                                sender = os.getComputerID(),
-                                senderName = state.username,
-                                target = state.currentContact,
-                                message = gui.inputText,
-                                time = os.epoch("utc")
-                            })
-                            gui.inputText = ""
-                            gui.inputScroll = 0
-                            drawUI()
-                        end
-                    end
-                else
-                    if #state.contacts > 0 then
-                        state.currentContact = state.contacts[1].id
-                        gui.selectedContact = 1
-                        drawUI()
+                if gui.inputText ~= "" and state.currentContact then
+                    if sendMessage(state.currentContact, gui.inputText) then
+                        table.insert(state.messages, {
+                            sender = os.getComputerID(),
+                            senderName = state.username,
+                            target = state.currentContact,
+                            message = gui.inputText,
+                            time = os.epoch("utc")
+                        })
+                        gui.inputText = ""
                     end
                 end
             elseif key == keys.backspace then
-                if #gui.inputText > 0 then
-                    gui.inputText = string.sub(gui.inputText, 1, -2)
-                    if gui.inputScroll > 0 then
-                        gui.inputScroll = math.max(0, gui.inputScroll - 1)
-                    end
-                    drawUI()
-                end
+                gui.inputText = string.sub(gui.inputText, 1, -2)
             end
         elseif event == "char" then
-            gui.inputText = gui.inputText .. key
-            if #gui.inputText > WIDTH - 3 then
-                gui.inputScroll = #gui.inputText - (WIDTH - 3)
-            end
-            drawUI()
+            local char = os.pullEvent("char")
+            gui.inputText = gui.inputText .. char
         elseif event == "mouse_click" then
-            if x <= CONTACTS_WIDTH and y >= 2 and y <= HEIGHT - INPUT_HEIGHT then
-                local contactIndex = y - 2 + gui.scrollOffset
-                if contactIndex <= #state.contacts then
-                    gui.selectedContact = contactIndex
-                    state.currentContact = state.contacts[contactIndex].id
-                    drawUI()
+            local _, x, y = os.pullEvent("mouse_click")
+            if x <= CONTACTS_W and y >= 2 and y <= H - INPUT_H then
+                local idx = y - 2 + gui.scroll
+                if idx <= #state.contacts then
+                    gui.selected = idx
+                    state.currentContact = state.contacts[idx].id
                 end
-            end
-        elseif event == "mouse_scroll" then
-            if x <= CONTACTS_WIDTH then
-                gui.scrollOffset = math.max(0, 
-                    math.min(#state.contacts - (HEIGHT - INPUT_HEIGHT - 2), 
-                    gui.scrollOffset - key))
-                drawUI()
             end
         elseif event == "terminate" then
             break
@@ -572,79 +399,53 @@ function handleInput()
     end
 end
 
--- Main client loop
+-- Main
 function main()
+    -- Connect
     local attempts = 0
-    local maxAttempts = 5
-    
-    while not state.connected and attempts < maxAttempts do
+    while not state.connected and attempts < 5 do
         attempts = attempts + 1
-        print("Attempt " .. attempts .. "/" .. maxAttempts)
-        
         if connectToServer() then
             break
         end
-        
-        if attempts < maxAttempts then
-            sleep(2)
-        end
+        sleep(2)
     end
     
     if not state.connected then
-        print("Failed to connect to server ID: " .. SERVER_ID)
-        print("Make sure server is running with ID 114")
-        print("Press any key to exit...")
-        os.pullEvent("key")
+        print("Can't connect to server!")
         return
     end
     
+    -- Load data
     updateContacts()
-    getNewMessages()
+    getMessages()
     
     if #state.contacts > 0 then
         state.currentContact = state.contacts[1].id
-        gui.selectedContact = 1
+        gui.selected = 1
     end
     
+    -- Start threads
     parallel.waitForAny(
         function()
             while true do
                 sleep(3)
-                
-                if not state.connected then
-                    if connectToServer() then
-                        updateContacts()
-                        getNewMessages()
-                    end
-                else
+                if state.connected then
                     updateContacts()
-                    getNewMessages()
-                    
-                    if os.clock() - state.lastPing > PING_INTERVAL then
-                        sendPing()
-                    end
+                    getMessages()
                 end
-                
                 drawUI()
             end
         end,
-        
-        function()
-            drawUI()
-            handleInput()
-        end
+        handleInput
     )
 end
 
--- Start
 local ok, err = pcall(main)
 if not ok then
-    term.setBackgroundColor(colors.black)
-    term.clear()
-    term.setCursorPos(1, 1)
     print("Error: " .. err)
 end
 
 term.setCursorBlink(false)
 rednet.close()
-print("\nClient stopped")
+print("Client stopped")
