@@ -283,7 +283,8 @@ local function printHelp()
     print("  server -n \"Чатовичок\" -s top")
 end
 
-local function parseArguments(args)
+local function parseArguments()
+    local args = {...}
     local i = 1
     while i <= #args do
         local arg = args[i]
@@ -312,8 +313,7 @@ end
 -- Основная функция
 local function main()
     -- Обработка аргументов командной строки
-    local args = {...}
-    if not parseArguments(args) then
+    if not parseArguments() then
         return
     end
     
