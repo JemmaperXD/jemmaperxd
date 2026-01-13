@@ -2,6 +2,7 @@
 local VERSION = "1.0"
 local PROTOCOL = "messenger_v2"
 local PING_INTERVAL = 10
+local SERVER_ID = 114 -- ID сервера (ваш сервер имеет ID 114)
 
 -- Parse command line arguments
 local args = {...}
@@ -29,13 +30,13 @@ if showHelp then
     print("  -m, --modem <side>    Modem side (left/right/top/bottom/back/front)")
     print("  -h, --help            Show this help message")
     print()
-    print("The client will find server automatically")
+    print("Server ID: " .. SERVER_ID)
     print("Protocol: " .. PROTOCOL)
     return
 end
 
 print("=== Messenger Client v" .. VERSION .. " ===")
-print("Looking for server...")
+print("Connecting to server ID: " .. SERVER_ID)
 
 -- Function to find wireless modem
 function findWirelessModem(specifiedSide)
@@ -105,63 +106,19 @@ local state = {
     currentContact = nil,
     connected = false,
     lastPing = 0,
-    serverId = nil,
+    serverId = SERVER_ID,
     serverName = "Unknown"
 }
 
 print("Client name: " .. state.username)
 
--- Function to find server
-function findServer()
-    print("Looking for server...")
-    local serverIds = rednet.lookup(PROTOCOL)
-    
-    if not serverIds or #serverIds == 0 then
-        print("No server found")
-        return nil
-    end
-    
-    for _, serverId in ipairs(serverIds) do
-        print("Trying server ID: " .. serverId)
-        
-        rednet.send(serverId, {type = "ping"}, PROTOCOL)
-        local id, response = rednet.receive(PROTOCOL, 2)
-        
-        if id == serverId and response and response.type == "pong" then
-            print("Found server: " .. serverId)
-            return serverId
-        end
-    end
-    
-    print("No working server found")
-    return nil
-end
-
--- GUI constants
-local WIDTH, HEIGHT = term.getSize()
-local INPUT_HEIGHT = 3
-local CONTACTS_WIDTH = 20
-local MESSAGES_X = CONTACTS_WIDTH + 2
-
--- GUI elements
-local gui = {
-    inputText = "",
-    selectedContact = 1,
-    scrollOffset = 0,
-    inputScroll = 0
-}
-
 -- Network functions
 function sendRequest(request, timeout)
-    if not state.serverId then
-        return nil
-    end
-    
-    rednet.send(state.serverId, request, PROTOCOL)
+    rednet.send(SERVER_ID, request, PROTOCOL)
     
     local senderId, response, protocol = rednet.receive(PROTOCOL, timeout or 3)
     
-    if senderId == state.serverId and protocol == PROTOCOL then
+    if senderId == SERVER_ID and protocol == PROTOCOL then
         return response
     end
     
@@ -169,26 +126,32 @@ function sendRequest(request, timeout)
 end
 
 function connectToServer()
-    print("Connecting...")
+    print("Connecting to server...")
     
-    state.serverId = findServer()
-    if not state.serverId then
-        return false
-    end
+    -- Test if server is reachable
+    rednet.send(SERVER_ID, {type = "ping"}, PROTOCOL)
+    local id, response = rednet.receive(PROTOCOL, 2)
     
-    local response = sendRequest({
-        type = "register",
-        name = state.username
-    }, 5)
-    
-    if response and response.success then
-        state.connected = true
-        state.serverName = response.serverName or "Unknown"
-        print("Connected to: " .. state.serverName)
-        return true
+    if id == SERVER_ID and response and response.type == "pong" then
+        print("Server is reachable")
+        
+        -- Register with server
+        local response = sendRequest({
+            type = "register",
+            name = state.username
+        }, 5)
+        
+        if response and response.success then
+            state.connected = true
+            state.serverName = response.serverName or "Unknown"
+            print("Connected to server: " .. state.serverName)
+            return true
+        else
+            print("Failed to register with server")
+            return false
+        end
     else
-        print("Failed to connect")
-        state.serverId = nil
+        print("Server not responding")
         return false
     end
 end
@@ -204,7 +167,7 @@ function sendMessage(targetId, message)
     if response and response.success then
         return true
     else
-        print("Failed to send message")
+        print("Failed to send message: " .. (response and response.error or "timeout"))
         return false
     end
 end
@@ -218,6 +181,7 @@ function updateContacts()
         state.contacts = response.clients
         state.serverName = response.serverName or state.serverName
         
+        -- Keep current contact selected if possible
         if state.currentContact then
             local found = false
             for _, contact in ipairs(state.contacts) do
@@ -260,13 +224,25 @@ function getNewMessages()
 end
 
 function sendPing()
-    if state.serverId then
-        sendRequest({
-            type = "ping"
-        })
-        state.lastPing = os.clock()
-    end
+    sendRequest({
+        type = "ping"
+    })
+    state.lastPing = os.clock()
 end
+
+-- GUI constants
+local WIDTH, HEIGHT = term.getSize()
+local INPUT_HEIGHT = 3
+local CONTACTS_WIDTH = 20
+local MESSAGES_X = CONTACTS_WIDTH + 2
+
+-- GUI elements
+local gui = {
+    inputText = "",
+    selectedContact = 1,
+    scrollOffset = 0,
+    inputScroll = 0
+}
 
 -- GUI functions
 function drawBorder()
@@ -279,9 +255,9 @@ function drawBorder()
     term.setCursorPos(2, 1)
     term.write("M: " .. state.username)
     
-    if state.serverId then
+    if state.connected then
         term.setCursorPos(WIDTH - 30, 1)
-        term.write("S: " .. state.serverName)
+        term.write("S: " .. state.serverName .. " (ID:" .. SERVER_ID .. ")")
     end
     
     term.setCursorPos(WIDTH - 8, 1)
@@ -615,7 +591,8 @@ function main()
     end
     
     if not state.connected then
-        print("Failed to connect")
+        print("Failed to connect to server ID: " .. SERVER_ID)
+        print("Make sure server is running with ID 114")
         print("Press any key to exit...")
         os.pullEvent("key")
         return
