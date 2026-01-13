@@ -1,11 +1,13 @@
--- client.lua - ameMessenger (Final Version)
+-- client.lua - ameMessenger (Final Fix)
 local protocol = "messenger_v2"
 local history_file = ".chat_history"
 local server_id = nil
 local client_name = ""
 local messages = {}
+local contacts = {}
+local selected_contact = nil
+local input_buffer = ""
 
--- Сохранение/Загрузка истории
 local function save_history()
     local f = fs.open(history_file, "w")
     f.write(textutils.serialize(messages))
@@ -21,7 +23,6 @@ local function load_history()
     end
 end
 
--- Получение ника и создание скрытых папок
 local function get_name()
     if not fs.exists("/.User") then fs.makeDir("/.User") end
     local files = fs.list("/.User")
@@ -39,10 +40,6 @@ end
 client_name = get_name()
 load_history()
 
-local selected_contact = nil
-local contacts = {}
-local input_buffer = ""
-
 local function draw_gui()
     local w, h = term.getSize()
     term.setBackgroundColor(colors.black)
@@ -54,7 +51,7 @@ local function draw_gui()
     term.clearLine()
     term.write(" ameMessenger | " .. client_name .. " (ID:" .. os.getComputerID() .. ")")
     
-    -- Sidebar (Contacts)
+    -- Sidebar
     local cp_w = 12
     for i=2, h-1 do
         term.setCursorPos(1, i)
@@ -66,6 +63,7 @@ local function draw_gui()
         if i + 1 < h then
             term.setCursorPos(1, i+1)
             term.setBackgroundColor(selected_contact == c.id and colors.lightGray or colors.gray)
+            term.setTextColor(colors.white)
             term.write(" " .. c.name:sub(1, cp_w-2))
         end
     end
@@ -93,15 +91,27 @@ local function draw_gui()
     term.write("> " .. input_buffer)
 end
 
-local function network_handler()
+-- Логика сети вынесена в отдельный поток с задержками
+local function network_loop()
     while true do
         server_id = rednet.lookup(protocol)
         if server_id then
+            -- Регистрируемся
             rednet.send(server_id, {type = "register", name = client_name}, protocol)
+            
+            -- Просим список онлайн игроков
             rednet.send(server_id, {type = "get_online"}, protocol)
+            
+            -- Просим новые сообщения
             rednet.send(server_id, {type = "get_messages"}, protocol)
         end
-        local id, msg = rednet.receive(protocol, 2)
+        os.sleep(5) -- Обновляем список раз в 5 секунд, чтобы не спамить сервер
+    end
+end
+
+local function network_receiver()
+    while true do
+        local id, msg = rednet.receive(protocol)
         if type(msg) == "table" then
             if msg.type == "online_list" then
                 contacts = msg.clients
@@ -115,8 +125,8 @@ local function network_handler()
             elseif msg.type == "error" then
                 input_buffer = "SYS: " .. tostring(msg.message)
             end
+            draw_gui()
         end
-        draw_gui()
     end
 end
 
@@ -141,11 +151,18 @@ local function input_handler()
                 end
             end
         elseif event == "mouse_click" then
-            if p2 <= 12 and contacts[p3-1] then selected_contact = contacts[p3-1].id end
+            if p2 <= 12 then
+                local idx = p3 - 1
+                if contacts[idx] then selected_contact = contacts[idx].id end
+            end
         end
         draw_gui()
     end
 end
 
-for _, s in ipairs(peripheral.getNames()) do if peripheral.getType(s) == "modem" then rednet.open(s) end end
-parallel.waitForAny(network_handler, input_handler)
+-- Старт
+for _, s in ipairs(peripheral.getNames()) do 
+    if peripheral.getType(s) == "modem" then rednet.open(s) end 
+end
+
+parallel.waitForAny(network_loop, network_receiver, input_handler)
