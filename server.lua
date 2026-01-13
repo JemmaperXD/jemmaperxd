@@ -1,8 +1,9 @@
--- server.lua - Messenger V2 Server (FIXED)
+-- server.lua - Messenger V2 Server (STABLE)
 local protocol = "messenger_v2"
 local data_file = "server_data.dat"
 local args = {...}
 
+-- Структура данных по умолчанию
 local server_data = {
     name = "Default Server",
     clients = {}, -- [id] = {name = string, lastSeen = timestamp}
@@ -16,9 +17,15 @@ local function log(msg)
 end
 
 local function save_data()
-    local f = fs.open(data_file, "w")
-    f.write(textutils.serialize(server_data))
-    f.close()
+    -- Используем pcall для защиты от краша при сохранении
+    local success, err = pcall(function()
+        local f = fs.open(data_file, "w")
+        f.write(textutils.serialize(server_data))
+        f.close()
+    end)
+    if not success then
+        log("Error saving data: " .. tostring(err))
+    end
 end
 
 local function load_data()
@@ -26,11 +33,20 @@ local function load_data()
         local f = fs.open(data_file, "r")
         local content = f.readAll()
         f.close()
+        
         if content and content ~= "" then
             local data = textutils.unserialize(content)
-            if data then server_data = data end
+            if type(data) == "table" then
+                -- Безопасное объединение данных. Не заменяем таблицу целиком!
+                server_data.name = data.name or server_data.name
+                server_data.clients = data.clients or {}
+                server_data.history = data.history or {}
+                server_data.messages_queue = data.messages_queue or {}
+                log("Data loaded successfully.")
+            else
+                log("Warning: Save file corrupted or empty. Starting fresh.")
+            end
         end
-        log("Data loaded.")
     end
 end
 
@@ -87,37 +103,45 @@ local function handle_requests()
                 local list = {}
                 local now = os.epoch("utc")
                 for cid, cdata in pairs(server_data.clients) do
-                    -- Удаляем тех, кого не видели больше 2 минут
-                    if now - cdata.lastSeen < 120000 then 
+                    if now - (cdata.lastSeen or 0) < 120000 then -- 2 min timeout
                         table.insert(list, {id = cid, name = cdata.name})
                     end
                 end
                 rednet.send(id, {type = "online_list", clients = list, serverName = server_data.name}, protocol)
 
-            -- ОТПРАВКА СООБЩЕНИЯ (ИСПРАВЛЕНО)
+            -- ОТПРАВКА СООБЩЕНИЯ (ИСПРАВЛЕНО ДУБЛИРОВАНИЕ)
             elseif msg.type == "send_message" then
-                -- Проверяем, что ID получателя существует и является числом
                 if msg.target and type(msg.target) == "number" then
-                    local packet = {
+                    -- 1. Объект для истории
+                    local history_packet = {
                         sender = id,
                         senderName = msg.senderName or "Anon",
                         target = msg.target,
                         message = msg.message or "",
                         time = os.epoch("utc")
                     }
+                    table.insert(server_data.history, history_packet)
                     
-                    table.insert(server_data.history, packet)
+                    -- 2. НОВЫЙ объект для очереди (Deep Copy)
+                    -- Это решает проблему "serialize table with repeated entries"
+                    local queue_packet = {
+                        sender = history_packet.sender,
+                        senderName = history_packet.senderName,
+                        target = history_packet.target,
+                        message = history_packet.message,
+                        time = history_packet.time
+                    }
                     
-                    -- Инициализируем очередь, если её нет
+                    -- Инициализация очереди и вставка
                     server_data.messages_queue[msg.target] = server_data.messages_queue[msg.target] or {}
-                    table.insert(server_data.messages_queue[msg.target], packet)
+                    table.insert(server_data.messages_queue[msg.target], queue_packet)
                     
                     rednet.send(id, {type = "message_response", success = true}, protocol)
                     log("Msg: " .. tostring(msg.senderName) .. " -> " .. tostring(msg.target))
-                    save_data() -- Сохраняем при каждом сообщении для надежности
+                    save_data()
                 else
-                    rednet.send(id, {type = "message_response", success = false, error = "No target specified"}, protocol)
-                    log("Error: Msg from " .. id .. " has no target")
+                    rednet.send(id, {type = "message_response", success = false, error = "Invalid target"}, protocol)
+                    log("Error: Msg from " .. id .. " has invalid target")
                 end
 
             -- ПОЛУЧЕНИЕ СООБЩЕНИЙ
@@ -125,7 +149,7 @@ local function handle_requests()
                 local queue = server_data.messages_queue[id] or {}
                 if #queue > 0 then
                     rednet.send(id, {type = "messages", messages = queue}, protocol)
-                    server_data.messages_queue[id] = {} -- Очищаем очередь после отправки
+                    server_data.messages_queue[id] = {} -- Очищаем очередь
                     save_data()
                 end
 
@@ -140,7 +164,7 @@ local function handle_requests()
     end
 end
 
--- Автосохранение (каждые 60 сек)
+-- Автосохранение
 local function auto_save()
     while true do
         os.sleep(60)
