@@ -1,4 +1,4 @@
--- client.lua - ameMessenger (Final Fix)
+-- client.lua - ameMessenger (Self-Chat FIXED)
 local protocol = "messenger_v2"
 local history_file = ".chat_history"
 local server_id = nil
@@ -63,7 +63,6 @@ local function draw_gui()
         if i + 1 < h then
             term.setCursorPos(1, i+1)
             term.setBackgroundColor(selected_contact == c.id and colors.lightGray or colors.gray)
-            term.setTextColor(colors.white)
             term.write(" " .. c.name:sub(1, cp_w-2))
         end
     end
@@ -83,29 +82,21 @@ local function draw_gui()
         end
     end
 
-    -- Input
     term.setCursorPos(1, h)
     term.setBackgroundColor(colors.blue)
-    term.setTextColor(colors.white)
     term.clearLine()
     term.write("> " .. input_buffer)
 end
 
--- Логика сети вынесена в отдельный поток с задержками
 local function network_loop()
     while true do
         server_id = rednet.lookup(protocol)
         if server_id then
-            -- Регистрируемся
             rednet.send(server_id, {type = "register", name = client_name}, protocol)
-            
-            -- Просим список онлайн игроков
             rednet.send(server_id, {type = "get_online"}, protocol)
-            
-            -- Просим новые сообщения
             rednet.send(server_id, {type = "get_messages"}, protocol)
         end
-        os.sleep(5) -- Обновляем список раз в 5 секунд, чтобы не спамить сервер
+        os.sleep(5)
     end
 end
 
@@ -114,7 +105,12 @@ local function network_receiver()
         local id, msg = rednet.receive(protocol)
         if type(msg) == "table" then
             if msg.type == "online_list" then
-                contacts = msg.clients
+                -- Дополнительная проверка на клиенте, чтобы точно не видеть себя
+                local filtered = {}
+                for _, c in ipairs(msg.clients) do
+                    if c.id ~= os.getComputerID() then table.insert(filtered, c) end
+                end
+                contacts = filtered
             elseif msg.type == "messages" then
                 for _, m in ipairs(msg.messages) do
                     local partner = (m.sender == os.getComputerID()) and m.target or m.sender
@@ -160,9 +156,5 @@ local function input_handler()
     end
 end
 
--- Старт
-for _, s in ipairs(peripheral.getNames()) do 
-    if peripheral.getType(s) == "modem" then rednet.open(s) end 
-end
-
+for _, s in ipairs(peripheral.getNames()) do if peripheral.getType(s) == "modem" then rednet.open(s) end end
 parallel.waitForAny(network_loop, network_receiver, input_handler)
