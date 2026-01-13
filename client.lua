@@ -1,4 +1,4 @@
--- client.lua - Messenger V2 Client
+-- client.lua - Messenger V2 Client (STABLE)
 local protocol = "messenger_v2"
 local args = {...}
 local client_name = "User" .. os.getComputerID()
@@ -10,8 +10,7 @@ local selected_contact = nil
 local contacts = {}
 local messages = {} -- [contactID] = { {sender, msg, time}, ... }
 local input_buffer = ""
-local scroll_pos = 0
-local status = "OFFLINE"
+local status = "SEARCHING..."
 
 -- Инициализация модема
 for i=1, #args do
@@ -30,8 +29,8 @@ local function init_rednet()
 end
 
 -- Отрисовка GUI
-local w, h = term.getSize()
 local function draw_gui()
+    local w, h = term.getSize()
     term.setBackgroundColor(colors.black)
     term.clear()
 
@@ -40,11 +39,13 @@ local function draw_gui()
     term.setBackgroundColor(colors.blue)
     term.setTextColor(colors.white)
     term.clearLine()
-    local status_color = (status == "ONLINE") and colors.green or colors.red
+    local status_color = (server_id) and colors.green or colors.red
+    local status_text = (server_id) and "ONLINE" or "OFFLINE"
+    
     term.write(" Messenger V2 | User: " .. client_name)
-    term.setCursorPos(w - 10, 1)
+    term.setCursorPos(w - #status_text - 1, 1)
     term.setTextColor(status_color)
-    term.write(status)
+    term.write(status_text)
 
     -- Левая панель (Контакты)
     local cp_w = math.floor(w * 0.3)
@@ -63,7 +64,10 @@ local function draw_gui()
                 term.setBackgroundColor(colors.gray)
             end
             term.setTextColor(colors.white)
-            term.write(" " .. contact.name:sub(1, cp_w - 2))
+            -- Обрезаем имя, если длинное
+            local name_display = contact.name
+            if #name_display > cp_w - 2 then name_display = name_display:sub(1, cp_w - 5) .. "..." end
+            term.write(" " .. name_display)
         end
     end
 
@@ -71,47 +75,62 @@ local function draw_gui()
     term.setBackgroundColor(colors.black)
     if selected_contact then
         local chat = messages[selected_contact] or {}
-        local start_row = 2
-        for i = #chat, 1, -1 do
-            local m = chat[i]
-            local line = (m.sender == os.getComputerID() and "Me: " or m.senderName .. ": ") .. m.message
-            term.setCursorPos(cp_w + 2, h - 3 - (#chat - i))
-            term.setTextColor(m.sender == os.getComputerID() and colors.lightBlue or colors.white)
-            term.write(line)
+        local msg_area_h = h - 4
+        
+        -- Показываем последние N сообщений
+        for i = 0, math.min(#chat, msg_area_h) - 1 do
+            local msg_idx = #chat - i
+            if msg_idx > 0 then
+                local m = chat[msg_idx]
+                local is_me = (m.sender == os.getComputerID())
+                local sender_lbl = is_me and "Me: " or (m.senderName or "?") .. ": "
+                local line = sender_lbl .. m.message
+                
+                -- Простая обрезка для одной строки (можно усложнить для переноса)
+                if #line > (w - cp_w - 2) then line = line:sub(1, w - cp_w - 5) .. "..." end
+                
+                term.setCursorPos(cp_w + 2, h - 3 - i)
+                term.setTextColor(is_me and colors.lightBlue or colors.white)
+                term.write(line)
+            end
         end
+    else
+        term.setCursorPos(cp_w + 2, math.floor(h/2))
+        term.setTextColor(colors.gray)
+        term.write("Select a contact to start chatting")
     end
 
     -- Нижняя панель (Ввод)
     term.setBackgroundColor(colors.blue)
+    term.setTextColor(colors.white)
     term.setCursorPos(1, h - 2)
     term.clearLine()
     term.setCursorPos(1, h - 1)
     term.clearLine()
-    term.write("> " .. input_buffer)
+    term.write("> " .. input_buffer .. "_")
 end
 
 -- Логика запросов
 local function update_loop()
     while true do
-        server_id = rednet.lookup(protocol)
+        local new_server = rednet.lookup(protocol)
+        server_id = new_server -- Обновляем глобальный ID
+        
         if server_id then
-            status = "ONLINE"
             -- Регистрация
             rednet.send(server_id, {type = "register", name = client_name}, protocol)
-            
             -- Список онлайн
             rednet.send(server_id, {type = "get_online"}, protocol)
-            
             -- Новые сообщения
             rednet.send(server_id, {type = "get_messages"}, protocol)
-        else
-            status = "OFFLINE"
         end
+        
         os.sleep(2)
         draw_gui()
     end
 end
 
+-- Обработка сети
 local function network_handler()
     while true do
         local id, msg = rednet.receive(protocol)
@@ -123,8 +142,14 @@ local function network_handler()
                 end
             elseif msg.type == "messages" then
                 for _, m in ipairs(msg.messages) do
+                    -- Используем ID отправителя как ключ чата
+                    local chat_id = (m.sender == os.getComputerID()) and m.target or m.sender
+                    -- Если это мое сообщение, которое вернулось (синхронизация), или входящее
+                    if m.sender == os.getComputerID() then chat_id = m.target end
+                    
                     messages[m.sender] = messages[m.sender] or {}
                     table.insert(messages[m.sender], m)
+                    
                     if peripheral.find("speaker") then peripheral.find("speaker").playNote("bit", 1, 12) end
                 end
             end
@@ -135,15 +160,19 @@ end
 
 -- Ввод пользователя
 local function input_handler()
+    local w, h = term.getSize()
     while true do
         local event, p1, p2, p3 = os.pullEvent()
         if event == "char" then
-            input_buffer = input_buffer .. p1
+            if #input_buffer < (w - 5) then -- Ограничение длины
+                input_buffer = input_buffer .. p1
+            end
         elseif event == "key" then
             if p1 == keys.backspace then
                 input_buffer = input_buffer:sub(1, -2)
             elseif p1 == keys.enter then
-                if selected_contact and #input_buffer > 0 then
+                -- ОТПРАВКА: Проверяем наличие сервера!
+                if server_id and selected_contact and #input_buffer > 0 then
                     local pkt = {
                         type = "send_message",
                         target = selected_contact,
@@ -151,10 +180,19 @@ local function input_handler()
                         senderName = client_name
                     }
                     rednet.send(server_id, pkt, protocol)
+                    
+                    -- Добавляем себе в историю сразу
                     messages[selected_contact] = messages[selected_contact] or {}
-                    table.insert(messages[selected_contact], {sender = os.getComputerID(), message = input_buffer, senderName = client_name})
+                    table.insert(messages[selected_contact], {
+                        sender = os.getComputerID(), 
+                        message = input_buffer, 
+                        senderName = client_name
+                    })
                     input_buffer = ""
                 end
+            elseif p1 == keys.terminate then
+                 -- Штатный выход
+                 return
             end
         elseif event == "mouse_click" then
             local cp_w = math.floor(w * 0.3)
@@ -169,3 +207,6 @@ end
 
 if not init_rednet() then error("Modem required!") end
 parallel.waitForAny(update_loop, network_handler, input_handler)
+term.setBackgroundColor(colors.black)
+term.clear()
+term.setCursorPos(1,1)
