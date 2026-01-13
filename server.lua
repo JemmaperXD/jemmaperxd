@@ -1,4 +1,4 @@
--- server.lua - ameMessenger Server (Advanced Admin)
+-- server.lua - ameMessenger Server (English/Stable)
 local protocol = "messenger_v2"
 local data_file = "server_data.dat"
 
@@ -11,7 +11,7 @@ local server_data = {
     muted = {}   -- [id] = {expires = timestamp, reason = string}
 }
 
--- Инициализация модема (авто-поиск)
+-- Modem Init
 local function get_modem()
     for _, s in ipairs(peripheral.getNames()) do
         if peripheral.getType(s) == "modem" then
@@ -24,7 +24,6 @@ end
 
 local active_side = get_modem()
 
--- Сохранение и загрузка
 local function save_data()
     local f = fs.open(data_file, "w")
     f.write(textutils.serialize(server_data))
@@ -38,25 +37,23 @@ local function load_data()
         f.close()
         if type(data) == "table" then
             for k, v in pairs(data) do server_data[k] = v end
+            server_data.banned = server_data.banned or {}
+            server_data.muted = server_data.muted or {}
         end
     end
 end
 
--- Проверка: активно ли еще наказание?
 local function check_penalty(penalty_table, id)
     local p = penalty_table[id]
     if not p then return nil end
-    
-    -- Если expires = 0, то бан перманентный
     if p.expires ~= 0 and os.epoch("utc") > p.expires then
-        penalty_table[id] = nil -- Время вышло, удаляем
+        penalty_table[id] = nil
         save_data()
         return nil
     end
     return p
 end
 
--- Отрисовка интерфейса
 local function draw_dashboard()
     local w, h = term.getSize()
     term.setBackgroundColor(colors.black)
@@ -65,6 +62,7 @@ local function draw_dashboard()
     term.setCursorPos(1, 1)
     term.setBackgroundColor(colors.gray)
     term.clearLine()
+    term.setTextColor(colors.white)
     term.write(" ameServer ADMIN | ID: " .. os.getComputerID())
 
     local total, online = 0, 0
@@ -75,46 +73,42 @@ local function draw_dashboard()
     end
 
     term.setBackgroundColor(colors.black)
+    term.setCursorPos(2, 3)
     term.setTextColor(colors.green)
-    term.setCursorPos(2, 3) term.write("Online: " .. online)
+    term.write("Online: " .. online)
+    term.setCursorPos(2, 4)
     term.setTextColor(colors.lightGray)
-    term.setCursorPos(2, 4) term.write("Total: " .. total)
+    term.write("Total: " .. total)
 
     term.setCursorPos(1, h-1)
     term.setBackgroundColor(colors.blue)
     term.setTextColor(colors.white)
     term.clearLine()
-    term.write("Команды: ban/mute <id> <мин> <причина>")
+    term.write("Cmd: ban/mute <id> <min> <reason>")
     term.setCursorPos(1, h)
     term.setBackgroundColor(colors.black)
     term.write("> ")
 end
 
--- Сетевая логика
 local function handle_requests()
     while true do
         local id, msg = rednet.receive(protocol)
         if type(msg) == "table" then
             
-            -- Проверка БАНА
             local ban = check_penalty(server_data.banned, id)
             if ban then
-                local time_left = "навсегда"
-                if ban.expires ~= 0 then
-                    time_left = math.ceil((ban.expires - os.epoch("utc")) / 60000) .. " мин."
-                end
-                rednet.send(id, {type = "error", message = "БАН ("..time_left.."). Причина: "..ban.reason}, protocol)
+                local timeLeft = ban.expires == 0 and "permanent" or math.ceil((ban.expires - os.epoch("utc"))/60000).."m"
+                rednet.send(id, {type = "error", message = "BANNED ("..timeLeft.."). Reason: "..ban.reason}, protocol)
             
             elseif msg.type == "register" then
-                server_data.clients[id] = {name = msg.name or "Unknown", lastSeen = os.epoch("utc")}
+                server_data.clients[id] = {name = msg.name or "User"..id, lastSeen = os.epoch("utc")}
                 rednet.send(id, {type = "register_response", success = true}, protocol)
                 save_data()
 
             elseif msg.type == "send_message" then
-                -- Проверка МУТА
                 local mute = check_penalty(server_data.muted, id)
                 if mute then
-                    rednet.send(id, {type = "error", message = "МУТ. Причина: "..mute.reason}, protocol)
+                    rednet.send(id, {type = "error", message = "MUTED. Reason: "..mute.reason}, protocol)
                 elseif msg.target and type(msg.target) == "number" then
                     local pkt = {sender = id, senderName = msg.senderName, target = msg.target, message = msg.message, time = os.epoch("utc")}
                     server_data.messages_queue[msg.target] = server_data.messages_queue[msg.target] or {}
@@ -141,7 +135,6 @@ local function handle_requests()
     end
 end
 
--- Консольные команды
 local function console_handler()
     while true do
         draw_dashboard()
@@ -149,41 +142,30 @@ local function console_handler()
         local tArgs = {}
         for s in input:gmatch("%S+") do table.insert(tArgs, s) end
         
-        local cmd = tArgs[1]
-        local targetID = tonumber(tArgs[2])
-        local duration = tonumber(tArgs[3])
-        
-        -- Собираем причину (все слова после 3-го аргумента)
+        local cmd, target, duration = tArgs[1], tonumber(tArgs[2]), tonumber(tArgs[3])
         local reason_parts = {}
         for i=4, #tArgs do table.insert(reason_parts, tArgs[i]) end
-        local reason = #reason_parts > 0 and table.concat(reason_parts, " ") or "Причина не указана"
+        local reason = #reason_parts > 0 and table.concat(reason_parts, " ") or "No reason"
 
-        if cmd and targetID then
+        if cmd and target then
             local expiry = 0
-            if duration and duration > 0 then
-                expiry = os.epoch("utc") + (duration * 60000)
-            end
+            if duration and duration > 0 then expiry = os.epoch("utc") + (duration * 60000) end
 
             if cmd == "ban" then
-                server_data.banned[targetID] = {expires = expiry, reason = reason}
-                print("ID " .. targetID .. " забанен на " .. (duration or "inf") .. " мин.")
+                server_data.banned[target] = {expires = expiry, reason = reason}
             elseif cmd == "mute" then
-                server_data.muted[targetID] = {expires = expiry, reason = reason}
-                print("ID " .. targetID .. " мут на " .. (duration or "inf") .. " мин.")
+                server_data.muted[target] = {expires = expiry, reason = reason}
             elseif cmd == "unban" then
-                server_data.banned[targetID] = nil
-                print("ID " .. targetID .. " разбанен.")
+                server_data.banned[target] = nil
             elseif cmd == "unmute" then
-                server_data.muted[targetID] = nil
-                print("ID " .. targetID .. " размучен.")
+                server_data.muted[target] = nil
             end
             save_data()
-            os.sleep(1)
         end
     end
 end
 
-if not active_side then error("Modem not found") end
+if not active_side then error("No modem found!") end
 load_data()
 rednet.host(protocol, server_data.name)
 parallel.waitForAny(handle_requests, console_handler)
