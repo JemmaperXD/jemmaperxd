@@ -97,7 +97,7 @@ local function safeBootAnim()
                 end
                 term.setCursorPos(cx - 2, h - 1)
                 term.setTextColor(colors.white)
-                term.write("ameOS by JemmaperXD")
+                term.write("ameOS")
                 angle = angle + 0.4
                 sleep(0.05)
             end
